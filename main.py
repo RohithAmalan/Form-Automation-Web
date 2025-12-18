@@ -53,6 +53,10 @@ async def process_form(page, entry):
     # but better to pass it. Refactoring get_ai_action_plan to accept data.
     actions = await get_ai_action_plan(content, data_to_fill)
 
+    if not actions:
+        print("❌ ERROR: No actions were generated. This usually means the OpenRouter API failed (check your API Key/Credits). Aborting this entry.")
+        return
+
     print(f"Received {len(actions)} actions from AI.")
 
     for action in actions:
