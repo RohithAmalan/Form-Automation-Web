@@ -1,21 +1,14 @@
 import pool from '../config/db';
 import { JobModel } from '../models/job.model';
+import { LogModel } from '../models/log.model';
+import { ProfileModel } from '../models/profile.model';
 import { processJob } from '../automation/playwrightRunner';
+import { AutomationLogger, JobControls, JobParams } from '../types/job.types';
 
 // ==========================================
 // 🛠️ JOB REGISTRY & DEFINITIONS (Single File)
 // ==========================================
 
-export interface AutomationLogger {
-    log: (msg: string, type: 'info' | 'error' | 'action' | 'warning' | 'success', details?: any) => Promise<void>;
-}
-
-export interface JobParams {
-    jobId: string;
-    url: string;
-    profileData: any;
-    logger: AutomationLogger;
-}
 
 // 1. Define what an "Executor" looks like
 type JobExecutor = (params: JobParams) => Promise<void>;
@@ -36,9 +29,9 @@ export function registerJobType(type: string, executor: JobExecutor) {
 // ==========================================
 
 // Executor A: Form Automation
-const formAutomationExecutor: JobExecutor = async ({ url, profileData, logger }) => {
-    // Calls the external Playwright logic
-    await processJob(url, profileData, logger);
+const formAutomationExecutor: JobExecutor = async (params) => {
+    // Calls the external Playwright logic with specific controls
+    await processJob(params);
 };
 
 // Executor B: Example Scraper (Placeholder)
@@ -58,41 +51,41 @@ registerJobType('DEFAULT', formAutomationExecutor); // Fallback
 // ==========================================
 // 👷 WORKER LOOP
 // ==========================================
-export async function runWorker() {
+// Polling Loop
+export const runWorker = async () => {
     console.log("👷 Worker started. Polling for jobs...");
     console.log(`Supported Types: ${Object.keys(REGISTRY).join(', ')}`);
 
     while (true) {
         try {
-            const res = await JobModel.getPending();
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            const pendingJobs = await JobModel.getPending();
 
-            if (res.rowCount === 0) {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                continue;
-            }
+            if (pendingJobs.rowCount === 0) continue;
 
-            const jobId = res.rows[0].id;
-            await pool.query("UPDATE jobs SET status = 'PROCESSING', started_at = NOW() WHERE id = $1", [jobId]);
+            const job = pendingJobs.rows[0];
+            await pool.query("UPDATE jobs SET status = 'PROCESSING', started_at = NOW() WHERE id = $1", [job.id]);
 
-            const jobRes = await pool.query("SELECT * FROM jobs WHERE id = $1", [jobId]);
-            const job = jobRes.rows[0];
-            const jobType = job.type || 'FORM_SUBMISSION';
+            console.log(`👷 Worker picked up job ${job.id} for ${job.url}`);
 
-            console.log(`🚀 Processing Job ${job.id} [Type: ${jobType}] (FRESH CODE)`);
+            const logger: AutomationLogger = {
+                log: async (message, type = 'info', metadata) => {
+                    await LogModel.create(job.id, message, type as any, metadata);
+                    console.log(`[Job ${job.id}] [${type.toUpperCase()}] ${message}`);
+                }
+            };
 
-            // Find Executor
-            const executor = REGISTRY[jobType] || REGISTRY['DEFAULT'];
-            if (!executor) {
-                throw new Error(`No executor found for type '${jobType}'`);
-            }
-
-            // Prepare Data
-            let profileData = {};
+            // Build Profile Data from Profile + Custom Data + File
+            let profileData: any = {};
             if (job.profile_id) {
-                const profRes = await pool.query('SELECT payload FROM profiles WHERE id = $1', [job.profile_id]);
-                if (profRes.rows.length > 0) profileData = { ...profRes.rows[0].payload };
+                try {
+                    const profRes = await pool.query('SELECT payload FROM profiles WHERE id = $1', [job.profile_id]);
+                    if (profRes.rows.length > 0) profileData = { ...profRes.rows[0].payload };
+                } catch (e) { console.error("Profile Fetch Error", e); }
             }
+
             if (job.custom_data) profileData = { ...profileData, ...job.custom_data };
+            // Pass the raw string (path OR json array) to runner. Runner handles parsing.
             if (job.file_path) profileData = { ...profileData, uploaded_file_path: job.file_path };
 
             // Inject Date/Time Context
@@ -106,28 +99,98 @@ export async function runWorker() {
                 current_year: now.getFullYear()
             };
 
-            const logger: AutomationLogger = {
-                log: async (msg, type, details = null) => {
-                    console.log(`[${type}] ${msg}`);
-                    try {
-                        await pool.query(
-                            `INSERT INTO logs (job_id, action_type, message, details) VALUES ($1, $2, $3, $4)`,
-                            [job.id, type, msg, details]
-                        );
-                    } catch (e: any) {
-                        // If job was deleted, silent fail or stop worker?
-                        if (e.code === '23503') { // Foreign Key Violation
-                            console.warn(`[Worker] Job ${job.id} no longer exists. Stopping logging.`);
-                            // Optionally throw to stop execution?
-                            // throw new Error("Job Deleted");
+            // Find Executor
+            // Default to 'FORM_SUBMISSION' if type is missing (DB schema might not have it yet or it's implicitly 'DEFAULT')
+            // Actually job table might not have 'type' column yet based on previous views?
+            // Existing code checked job.type. Let's assume it exists or fallback.
+            const jobType = (job as any).type || 'FORM_SUBMISSION';
+            const executor = REGISTRY[jobType] || REGISTRY['DEFAULT'];
+
+            if (!executor) {
+                await logger.log(`Unknown Job Type: ${jobType}`, 'error');
+                throw new Error(`No executor found for type '${jobType}'`);
+            }
+
+            // --- LIFECYCLE CONTROLS IMPLEMENTATION ---
+
+            const checkPause = async () => {
+                const res = await pool.query("SELECT status FROM jobs WHERE id = $1", [job.id]);
+                const status = res.rows[0]?.status;
+
+                if (status === 'PAUSED') {
+                    await logger.log("⏸️ Job manually PAUSED. Waiting for Continue...", "warning");
+                    while (true) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        const check = await pool.query("SELECT status FROM jobs WHERE id = $1", [job.id]);
+                        const cur = check.rows[0]?.status;
+                        if (cur === 'PROCESSING') {
+                            await logger.log("▶️ Job Manually Resumed!", "success");
+                            break;
                         }
+                        if (cur === 'FAILED' || cur === 'COMPLETED') throw new Error(`Job stopped while paused (Status: ${cur})`);
                     }
                 }
             };
 
+            const askUser = async (type: 'file' | 'text', label: string): Promise<string | null> => {
+                console.log(`⏸️ Job ${job.id} WAITING FOR INPUT (${type}): ${label}`);
+
+                // 1. Set Info in Custom Data
+                const jRes = await pool.query("SELECT custom_data FROM jobs WHERE id = $1", [job.id]);
+                const cData = jRes.rows[0]?.custom_data || {};
+                const nData = { ...cData, _missing_type: type, _missing_label: label };
+                await pool.query("UPDATE jobs SET custom_data = $1, status = 'WAITING_INPUT' WHERE id = $2", [nData, job.id]);
+
+                // 2. Wait Loop
+                const POLL = 3000;
+                const MAX = 10 * 60 * 1000;
+                let elapsed = 0;
+
+                while (elapsed < MAX) {
+                    await new Promise(r => setTimeout(r, POLL));
+                    elapsed += POLL;
+
+                    const check = await pool.query("SELECT status, file_path, custom_data FROM jobs WHERE id = $1", [job.id]);
+                    const curJob = check.rows[0];
+
+                    if (curJob.status === 'RESUMING') {
+                        console.log(`▶️ Job ${job.id} RESUMING with Input!`);
+                        await pool.query("UPDATE jobs SET status = 'PROCESSING' WHERE id = $1", [job.id]);
+
+                        if (type === 'file') return curJob.file_path;
+                        if (curJob.custom_data && curJob.custom_data[label]) return curJob.custom_data[label];
+                        if (curJob.custom_data && curJob.custom_data.user_response) return curJob.custom_data.user_response;
+                        return null; // Fallback
+                    }
+                    if (curJob.status === 'FAILED') return null;
+                }
+                return null;
+            };
+
+            const saveLearnedData = async (key: string, value: string) => {
+                if (!job.profile_id) return;
+                try {
+                    const pRes = await pool.query("SELECT payload FROM profiles WHERE id = $1", [job.profile_id]);
+                    if (pRes.rows.length === 0) return;
+                    const pl = { ...pRes.rows[0].payload, [key]: value };
+                    await pool.query("UPDATE profiles SET payload = $1, updated_at = NOW() WHERE id = $2", [pl, job.profile_id]);
+                    console.log(`🧠 Learned: ${key} = ${value.substring(0, 20)}...`);
+                } catch (e) { console.error("Save Learned Fail:", e); }
+            };
+
+            // ------------------------------------------
+
             // Run
             try {
-                await executor({ jobId: job.id, url: job.url, profileData, logger });
+                await executor({
+                    jobId: job.id,
+                    url: job.url,
+                    profileData,
+                    logger,
+                    checkPause,
+                    askUser,
+                    saveLearnedData
+                });
 
                 await pool.query(`UPDATE jobs SET status = 'COMPLETED', completed_at = NOW() WHERE id = $1`, [job.id]);
                 console.log(`✅ Job ${job.id} Completed`);

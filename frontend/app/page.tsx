@@ -61,6 +61,24 @@ export default function DashboardPage() {
     }
   };
 
+  const pauseJob = async (jobId: string) => {
+    try {
+      await fetch(`${SERVER_URL}/jobs/${jobId}/pause`, { method: 'POST', credentials: 'include' });
+      fetchJobs();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const continueJob = async (jobId: string) => {
+    try {
+      await fetch(`${SERVER_URL}/jobs/${jobId}/continue`, { method: 'POST', credentials: 'include' });
+      fetchJobs();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const viewLogs = async (jobId: string) => {
     setShowLogs(true);
     setLogs([]);
@@ -72,6 +90,12 @@ export default function DashboardPage() {
       console.error(err);
     }
   };
+
+  // ... (resume helper functions remain same, but avoiding huge replace block)
+
+  // ... (skipping to render part)
+  /* I will use a separate replacement for the render part to be safer */
+
 
   const handleResumeSubmit = async () => {
     if (!resumeJobId) return;
@@ -262,7 +286,14 @@ export default function DashboardPage() {
                           job.status === 'FAILED' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
                             job.status === 'WAITING_INPUT' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse' :
                               'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
-                        {job.status === 'WAITING_INPUT' ? '⚠️ INPUT REQUIRED' : job.status}
+                        {job.status === 'WAITING_INPUT' ? (
+                          <span className="flex items-center gap-1.5">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            INPUT REQUIRED
+                          </span>
+                        ) : job.status}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -286,6 +317,21 @@ export default function DashboardPage() {
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => viewLogs(job.id)} className="text-xs text-blue-400 hover:text-blue-300 font-medium hover:underline transition-all">View Logs</button>
+
+                        {/* PAUSE / CONTINUE */}
+                        {job.status === 'PROCESSING' && (
+                          <button onClick={() => pauseJob(job.id)} className="px-3 py-1 bg-slate-700/50 hover:bg-slate-600 text-slate-300 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-slate-600 flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            Pause
+                          </button>
+                        )}
+                        {job.status === 'PAUSED' && (
+                          <button onClick={() => continueJob(job.id)} className="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-emerald-500/30 flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            Continue
+                          </button>
+                        )}
+
                         {job.status === 'WAITING_INPUT' && (
                           <button onClick={() => openResumeModal(job.id)} className="px-3 py-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-yellow-500/30">Resume</button>
                         )}

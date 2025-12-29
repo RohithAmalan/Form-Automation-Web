@@ -63,7 +63,7 @@ export const FormController = {
         try {
             const body = req.body || {};
             const { url, profile_id, custom_data, form_name } = body;
-            const file = req.file;
+            const files = req.files as Express.Multer.File[] || [];
 
             let parsedCustomData = {};
             if (custom_data) {
@@ -78,10 +78,16 @@ export const FormController = {
                 return res.status(400).json({ error: "Missing url or profile_id", received: body });
             }
 
-            const filePath = file ? file.path : null;
+            // Store as JSON Array of paths
+            const filePaths = files.map(f => f.path);
+            // If single file (legacy compatibility or preference), we could store string. 
+            // BUT cleaner to standardize on JSON string for consistency if storing multiple.
+            // Let's store JSON string.
+            const filePathToSave = filePaths.length > 0 ? JSON.stringify(filePaths) : null;
+
             const finalFormName = form_name || "Untitled Form";
 
-            const job = await JobModel.create(url, profile_id, parsedCustomData, filePath, finalFormName);
+            const job = await JobModel.create(url, profile_id, parsedCustomData, filePathToSave, finalFormName);
             res.json(job);
         } catch (err: any) {
             console.error("Job Creation Error:", err);
@@ -99,7 +105,57 @@ export const FormController = {
         }
     },
 
+    // --- Job Control (Pause/Resume/Continue) ---
+
+    pauseJob: async (req: Request, res: Response) => {
+        console.log(`[API] Pause Request for Job ${req.params.id}`);
+        try {
+            // Only pause if currently PROCESSING
+            // We use a safe update: UPDATE jobs SET status='PAUSED' WHERE id=$1 AND status='PROCESSING'
+            // This prevents overwriting WAITING_INPUT or FAILED
+            const result = await pool.query(
+                "UPDATE jobs SET status = 'PAUSED' WHERE id = $1 AND status = 'PROCESSING'",
+                [req.params.id]
+            );
+
+            if (result.rowCount === 0) {
+                // Check why?
+                const check = await pool.query("SELECT status FROM jobs WHERE id = $1", [req.params.id]);
+                if (check.rows.length === 0) return res.status(404).json({ error: "Job not found" });
+                console.warn(`[API] Pause failed. Status is '${check.rows[0].status}'`);
+                return res.status(400).json({ error: `Cannot pause job in status '${check.rows[0].status}'` });
+            }
+            res.json({ message: "Job Paused" });
+        } catch (err: any) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+
+    continueJob: async (req: Request, res: Response) => {
+        console.log(`[API] Continue Request for Job ${req.params.id}`);
+        try {
+            // Only continue if currently PAUSED
+            const result = await pool.query(
+                "UPDATE jobs SET status = 'PROCESSING' WHERE id = $1 AND status = 'PAUSED'",
+                [req.params.id]
+            );
+
+            if (result.rowCount === 0) {
+                const check = await pool.query("SELECT status FROM jobs WHERE id = $1", [req.params.id]);
+                if (check.rows.length === 0) return res.status(404).json({ error: "Job not found" });
+                return res.status(400).json({ error: `Cannot continue job in status '${check.rows[0].status}'` });
+            }
+            res.json({ message: "Job Resumed (Processing)" });
+        } catch (err: any) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+
     resumeJob: async (req: Request, res: Response): Promise<any> => {
+
+
         try {
             const file = req.file;
             const updates: any = { status: 'RESUMING' };

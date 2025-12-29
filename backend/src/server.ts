@@ -39,9 +39,15 @@ app.use(passport.session());
 app.use(cors({ origin: 'http://localhost:3000', credentials: true })); // Update CORS
 app.use(express.json());
 
+import templateRoutes from './routes/template.routes';
+
+// ... (previous imports)
+
 // Mount Routes
 app.use('/auth', authRoutes); // Auth Routes
+app.use('/templates', templateRoutes); // Templates mounted at /templates prefix
 app.use('/', formRoutes);
+
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });

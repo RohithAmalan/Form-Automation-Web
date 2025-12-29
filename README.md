@@ -5,12 +5,11 @@ A robust, AI-powered form automation agent featuring **Human-in-the-Loop (HITL)*
 ## 🚀 Key Features
 
 *   **Human-in-the-Loop (HITL)**: Intelligently pauses when data is missing (e.g., File Uploads, specific text fields) and waits for user input via the dashboard.
-*   **🧠 Profile Learning (New)**: Automatically learns from your inputs. If you provide information once (e.g., "Address Line 2"), it saves it to your profile and never asks again.
-*   **⏱️ Execution Timer (New)**: Tracks the precise working duration of each agent, displayed live on the dashboard.
-*   **Smart Profile Management**: Automatically mapping user data (Name, Address, Experience) to various form layouts.
-*   **Custom Data Override**: Job-specific data (`{"City": "Paris"}`) overrides default profile data.
-*   **Resume Capability**: Seamlessly resume jobs after providing missing info.
-*   **Full-Stack Dashboard**: Real-time status, logs, and interaction UI.
+*   **📂 Smart File Handling (New)**: Support for **Multiple File Uploads**. The AI intelligently selects the correct file from your upload list for specific fields (e.g., Resume vs. Cover Letter).
+*   **⚡ Quick Replay & Caching (New)**: Automatically caches successful form actions. Re-run complex forms in seconds with the **Quick Replay** sidebar.
+*   **📝 Organize History (New)**: Rename or Delete your Quick Replay templates to keep your workspace clean.
+*   **🧠 Profile Learning**: Automatically learns from your inputs. If you provide information once (e.g., "Address Line 2"), it saves it to your profile and never asks again.
+*   **Full-Stack Dashboard**: Real-time status, logs, and interaction UI with a professional, icon-based aesthetic.
 
 ## 🛠️ Tech Stack
 

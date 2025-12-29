@@ -35,9 +35,11 @@ router.delete('/profiles/:id', FormController.deleteProfile);
 
 // Jobs
 router.get('/jobs', FormController.getJobs);
-router.post('/jobs', upload.single('file'), FormController.createJob);
+router.post('/jobs', upload.array('files', 10), FormController.createJob);
 router.delete('/jobs/:id', FormController.deleteJob);
 router.delete('/jobs', FormController.deleteAllJobs); // New Route
+router.post('/jobs/:id/pause', FormController.pauseJob);
+router.post('/jobs/:id/continue', FormController.continueJob);
 router.post('/jobs/:id/resume', upload.single('file'), FormController.resumeJob);
 // Logs - Moved to top
 console.log("Registering /logs route (TOP)");

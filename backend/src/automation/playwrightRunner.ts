@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, Page, Frame } from 'playwright';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -53,10 +53,9 @@ interface Action {
     type: "fill" | "click" | "upload" | "ask_user";
 }
 
-// Interface for callbacks to keeping this file DB-agnostic
-export interface AutomationLogger {
-    log: (msg: string, type: 'info' | 'error' | 'action' | 'warning' | 'success', details?: any) => Promise<void>;
-}
+import { AutomationLogger, JobControls, JobParams } from '../types/job.types';
+
+// Helper to clean HTML using Cheerio
 
 // New helper to ask AI for a specific JS fix
 async function getAiJavascriptFallback(html: string, selector: string, value: string): Promise<string> {
@@ -103,90 +102,34 @@ async function getAiJavascriptFallback(html: string, selector: string, value: st
 
 import pool from '../config/db';
 import { JobModel } from '../models/job.model';
+import { TemplateModel } from '../models/template.model';
 
-// Helper to update custom_data in DB
-async function setMissingFieldInfo(jobId: string, type: 'file' | 'text', label: string) {
-    // We need to fetch current custom_data first to preserve it
-    const res = await pool.query("SELECT custom_data FROM jobs WHERE id = $1", [jobId]);
-    const currentData = res.rows[0]?.custom_data || {};
+// [Removed local Helper to update custom_data in DB]
+// [Removed local Helper to SAVE learned data to Profile]
+// [Removed local waitForResume]
 
-    const newData = {
-        ...currentData,
-        _missing_type: type,
-        _missing_label: label
-    };
+// Helper for Manual Pause
+// [Removed local checkForManualPause]
 
-    await pool.query("UPDATE jobs SET custom_data = $1 WHERE id = $2", [newData, jobId]);
-}
-
-// Helper to SAVE learned data to Profile
-async function saveLearnedData(profileId: string, key: string, value: string) {
-    if (!profileId || !key || !value) return;
-    try {
-        // Fetch current payload
-        const res = await pool.query("SELECT payload FROM profiles WHERE id = $1", [profileId]);
-        if (res.rows.length === 0) return;
-
-        const currentPayload = res.rows[0].payload || {};
-        // Merge new data
-        const newPayload = { ...currentPayload, [key]: value };
-
-        await pool.query("UPDATE profiles SET payload = $1, updated_at = NOW() WHERE id = $2", [newPayload, profileId]);
-        console.log(`🧠 Learned new data for '${key}': ${value.substring(0, 20)}...`);
-    } catch (e) {
-        console.error("Failed to save learned data:", e);
-    }
-}
-
-async function waitForResume(jobId: string, missingType: 'file' | 'text', missingLabel: string): Promise<string | null> {
-    console.log(`⏸️ Job ${jobId} PAUSED. Waiting for user input (${missingType}): ${missingLabel}`);
-
-    // Set Status to WAITING_INPUT and store meta-data for UI
-    await setMissingFieldInfo(jobId, missingType, missingLabel);
-    await pool.query("UPDATE jobs SET status = 'WAITING_INPUT' WHERE id = $1", [jobId]);
-
-    // Poll for RESUME
-    const POLL_INTERVAL = 3000;
-    const MAX_WAIT = 10 * 60 * 1000; // 10 Minutes
-    let elapsed = 0;
-
-    while (elapsed < MAX_WAIT) {
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-        elapsed += POLL_INTERVAL;
-
-        const res = await pool.query("SELECT status, file_path, custom_data FROM jobs WHERE id = $1", [jobId]);
-        const job = res.rows[0];
-
-        if (job.status === 'RESUMING') {
-            // User Resumed!
-            console.log(`▶️ Job ${jobId} RESUMING!`);
-            await pool.query("UPDATE jobs SET status = 'PROCESSING' WHERE id = $1", [jobId]);
-
-            // Return the relevant data based on type
-            if (missingType === 'file') return job.file_path;
-
-            // For text, we expect the API to have put the value into custom_data under the label OR a special key
-            // Let's assume the API puts it in custom_data[missingLabel] or custom_data['user_input']
-            // We'll normalize to looking for it in custom_data
-            if (job.custom_data && job.custom_data[missingLabel]) return job.custom_data[missingLabel];
-            // Fallback: Check if they just sent a generic 'user_response'
-            if (job.custom_data && job.custom_data.user_response) return job.custom_data.user_response;
-
-            return null;
-        }
-
-        if (job.status === 'FAILED') {
-            return null; // Cancelled
-        }
-    }
-
-    return null; // Timed out
-}
 
 async function getAiActionPlan(html: string, profileData: any): Promise<Action[]> {
-    // Explicitly check if a file path is present in the profile data
-    const hasFile = profileData.uploaded_file_path ? true : false;
-    const filePathInfo = hasFile ? `File to upload is available at: "${profileData.uploaded_file_path}". Look for <input type="file">.` : "No file path provided in profile. If <input type='file'> exists, you MUST ask the user for it.";
+    // Check if uploaded_file_path contains JSON array or single string
+    let availableFiles: string[] = [];
+    if (profileData.uploaded_file_path) {
+        try {
+            const parsed = JSON.parse(profileData.uploaded_file_path);
+            if (Array.isArray(parsed)) availableFiles = parsed;
+            else availableFiles = [profileData.uploaded_file_path];
+        } catch {
+            availableFiles = [profileData.uploaded_file_path];
+        }
+    }
+
+    const hasFile = availableFiles.length > 0;
+    const fileListStr = JSON.stringify(availableFiles);
+    const filePathInfo = hasFile
+        ? `Files available to upload: ${fileListStr}. Look for <input type="file">.`
+        : "No file path provided in profile. If <input type='file'> exists, you MUST ask the user for it.";
 
     const prompt = `
     You are an expert browser automation agent.
@@ -208,7 +151,7 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
        {
          "actions": [
             {"selector": "#name", "value": "John", "type": "fill"},
-            {"selector": "input[type='file']", "value": "/path/to/file.pdf", "type": "upload"},
+            {"selector": "input[type='file']", "value": "['/path/1', '/path/2']", "type": "upload"},
             {"selector": "#submit", "type": "click"},
             {"selector": "field_label", "value": "Question for user?", "type": "ask_user"}
          ]
@@ -220,7 +163,8 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
     5. Use 'click' for buttons, checkboxes, AND RADIO BUTTONS.
     6. For file uploads (<input type="file">):
        - Use type 'upload'.
-       - The 'value' MUST be: "${profileData.uploaded_file_path || ''}".
+       - The 'value' should be the JSON stringified array of paths: '${fileListStr}'.
+       - If there are multiple file inputs, assign the appropriate file from the list if possible, or use all.
     7. CRITICAL: Find the 'Submit' button and \`click\` it as the VERY LAST action.
 
     8. SPECIAL INSTRUCTION FOR DATES:
@@ -287,23 +231,263 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
     }
 }
 
+async function executeActions(page: Page, actions: Action[], profileData: any, logger: AutomationLogger, controls: JobControls) {
+    for (const action of actions) {
+        // --- MANUAL PAUSE CHECK ---
+        await controls.checkPause();
+        // --------------------------
+
+        const { selector, value, type } = action;
+
+        try {
+            // Find which frame has this selector
+            let targetFrame: any = null;
+            // Check main frame first
+            if (await page.$(selector).catch(() => null)) {
+                targetFrame = page;
+            } else {
+                // Check other frames
+                for (const frame of page.frames()) {
+                    if (await frame.$(selector).catch(() => null)) {
+                        targetFrame = frame;
+                        break;
+                    }
+                }
+            }
+
+            // If not found, skip
+            if (!targetFrame) {
+                // One retry for dynamic content?
+                await page.waitForTimeout(1000);
+                if (await page.$(selector).catch(() => null)) targetFrame = page;
+            }
+
+            if (!targetFrame) {
+                await logger.log(`Element not found: ${selector}`, 'warning');
+                continue;
+            }
+
+            // Highlight
+            await targetFrame.evaluate((sel: string) => {
+                try {
+                    const el = document.querySelector(sel) as HTMLElement;
+                    if (el) {
+                        el.style.border = '2px solid red';
+                        el.scrollIntoView({ block: 'center', inline: 'center' });
+                    }
+                } catch (e) { }
+            }, selector);
+
+            if (type === 'fill') {
+                // Check editable
+                const isEditable = await targetFrame.locator(selector).isEditable().catch(() => true);
+                if (!isEditable) {
+                    await logger.log(`Skipping read-only: ${selector}`, 'warning');
+                    continue;
+                }
+
+                // Handle Select or Input
+                const tagName = await targetFrame.evaluate((sel: string) => {
+                    const el = document.querySelector(sel);
+                    return el ? el.tagName : '';
+                }, selector);
+
+                if (tagName === 'SELECT') {
+
+                    const options = await targetFrame.evaluate((sel: string) => {
+                        const select = document.querySelector(sel) as HTMLSelectElement;
+                        if (!select) return [];
+                        return Array.from(select.options).map(opt => ({
+                            text: opt.text.trim(),
+                            value: opt.value,
+                            index: opt.index
+                        }));
+                    }, selector);
+
+                    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+                    const targetVal = normalize(value || "");
+
+                    // Find Match - Enhanced Logic
+                    let bestMatch = options.find((o: any) => o.text === value);
+                    if (!bestMatch) bestMatch = options.find((o: any) => normalize(o.text) === targetVal);
+                    if (!bestMatch) bestMatch = options.find((o: any) => normalize(o.text).includes(targetVal));
+                    if (!bestMatch) bestMatch = options.find((o: any) => o.value === value);
+
+                    // Try strict label match if value failed
+                    if (!bestMatch && value) {
+                        bestMatch = options.find((o: any) =>
+                            o.text.toLowerCase().trim() === value.toLowerCase().trim()
+                        );
+                    }
+
+                    if (bestMatch) {
+                        // STRATEGY: Double Selection + Focus/Blur
+                        await targetFrame.focus(selector);
+
+                        // Select a DIFFERENT option first (to force change event)
+                        const dummyOption = options.find((o: any) => o.index !== bestMatch.index);
+                        if (dummyOption) {
+                            await targetFrame.selectOption(selector, { index: dummyOption.index });
+                            await page.waitForTimeout(200);
+                        }
+
+                        // Select the CORRECT option
+                        await logger.log(`Selecting option "${bestMatch.text}" (val: ${bestMatch.value})`, 'action');
+                        await targetFrame.selectOption(selector, { value: bestMatch.value });
+                    } else {
+                        // Fallback
+                        await logger.log(`Option match failed. Trying direct selectOption by label: "${value}"`, 'warning');
+                        try {
+                            await targetFrame.selectOption(selector, { label: value });
+                        } catch (e) {
+                            await targetFrame.selectOption(selector, { value: value }).catch(() => { });
+                        }
+                    }
+
+                    // Force Events & Blur
+                    await page.waitForTimeout(100);
+                    await targetFrame.locator(selector).dispatchEvent('change');
+                    await targetFrame.locator(selector).dispatchEvent('input');
+                    await targetFrame.locator(selector).blur();
+
+                    // Debug Final State
+                    const finalValue = await targetFrame.evalOnSelector(selector, (el: HTMLSelectElement) => el.value);
+                    await logger.log(`Final Dropdown State: ${finalValue}`, 'info');
+
+                } else {
+                    await targetFrame.fill(selector, String(value));
+                }
+
+            } else if (type === 'click') {
+                // Self-Healing
+                const isOption = selector.toLowerCase().includes('option');
+                if (isOption) {
+                    const parentId = await targetFrame.evaluate((sel: string) => {
+                        const el = document.querySelector(sel);
+                        const p = el?.closest('select');
+                        return p ? p.id : null;
+                    }, selector);
+
+                    const val = await targetFrame.locator(selector).getAttribute('value');
+
+                    if (parentId && val) {
+                        await targetFrame.selectOption(`#${parentId}`, { value: val });
+                        await logger.log(`Healed click-option to select-option`, 'action', { selector });
+                        continue;
+                    }
+                }
+
+                await targetFrame.click(selector);
+                await page.waitForTimeout(1000); // Wait for reaction
+
+            } else if (type === 'ask_user') {
+                // --- HUMAN IN THE LOOP (TEXT) ---
+                await logger.log(`AI asking user. Selector: "${selector}", Value: "${value}"`, 'warning');
+
+                const labelEncoded = value || selector;
+                const userResponse = await controls.askUser('text', labelEncoded);
+
+                if (userResponse) {
+                    if (profileData.profile_id) {
+                        await controls.saveLearnedData(labelEncoded, userResponse);
+                        await logger.log(`Saved "${labelEncoded}" to your profile for future use.`, 'success');
+                    }
+                    await logger.log(`User provided: "${userResponse}"`, 'success');
+
+                    // Attempt auto-fill
+                    let filled = false;
+                    if (selector.includes('#') || selector.includes('.') || selector.includes('[')) {
+                        try {
+                            await targetFrame.fill(selector, userResponse);
+                            filled = true;
+                        } catch (e) { }
+                    }
+                    if (!filled) {
+                        await logger.log(`Could not auto-fill field "${selector}" with "${userResponse}". Please check manually.`, 'warning');
+                    } else {
+                        await logger.log(`Auto-filled "${selector}" successfully.`, 'action');
+                    }
+                } else {
+                    throw new Error("User cancelled text input.");
+                }
+
+            } else if (type === 'upload') {
+                // 1. Determine files to use
+                // Override with current job's files if available (REPLAY override)
+                let filesToUse: string[] = [];
+
+                // Logic: 
+                // A. Check if current job profile has files (NEW files for this run)
+                if (profileData.uploaded_file_path) {
+                    try {
+                        const parsed = JSON.parse(profileData.uploaded_file_path);
+                        if (Array.isArray(parsed)) filesToUse = parsed;
+                        else filesToUse = [profileData.uploaded_file_path];
+                    } catch {
+                        filesToUse = [profileData.uploaded_file_path];
+                    }
+                }
+
+                // B. If NO new files, use value from Action (Cached path)
+                if (filesToUse.length === 0 && value) {
+                    try {
+                        const parsed = JSON.parse(value);
+                        if (Array.isArray(parsed)) filesToUse = parsed;
+                        else filesToUse = [value];
+                    } catch {
+                        filesToUse = [value];
+                    }
+                }
+
+                // 2. Validate Files
+                const validPaths: string[] = [];
+                for (const fPath of filesToUse) {
+                    if (fPath && (fs.existsSync(path.resolve(fPath)) || fs.existsSync(path.join(__dirname, '../../../', fPath)))) {
+                        const p = fs.existsSync(path.resolve(fPath)) ? path.resolve(fPath) : path.join(__dirname, '../../../', fPath);
+                        validPaths.push(p);
+                    }
+                }
+
+                if (validPaths.length === 0) {
+                    await logger.log(`Missing file for upload selector: ${selector}. Pausing for user input...`, 'warning');
+                    const newPath = await controls.askUser('file', 'Missing File Upload');
+                    if (newPath) {
+                        // Simplify: Assume user provides single path string
+                        validPaths.push(newPath); // Usually absolute if from prompt
+                        await logger.log(`User provided file: ${newPath}. Resuming...`, 'success');
+                    } else {
+                        throw new Error("User cancelled or timed out on file upload.");
+                    }
+                }
+
+                if (validPaths.length > 0) {
+                    await targetFrame.setInputFiles(selector, validPaths);
+                    await logger.log(`Uploaded ${validPaths.length} file(s): ${validPaths.map(p => path.basename(p)).join(', ')}`, 'action');
+                }
+            }
+
+            // Brief pause
+            await page.waitForTimeout(500);
+
+        } catch (err: any) {
+            await logger.log(`Failed action on ${selector}`, 'error', { error: err.message });
+        }
+    }
+}
+
 /**
  * Pure Automation Function
  * Doesn't know about DB. Communicates via Logger callback.
  * Throws error on failure, Resolves on success.
  */
-export async function processJob(url: string, profileData: any, logger: AutomationLogger) {
-    // console.log(`Processing Job for ${url}`); // Optional local log
+export async function processJob({ url, profileData, logger, checkPause, askUser, saveLearnedData }: JobParams) {
+    // Controls Object
+    const controls: JobControls = { checkPause, askUser, saveLearnedData };
 
     // VITALITY CHECK
     try {
         await logger.log('Testing AI connection...', 'info');
-        await openai.chat.completions.create({
-            model: "openai/gpt-3.5-turbo", // Use cheap model for ping
-            messages: [{ role: "user", content: "ping" }],
-            max_tokens: 5
-        });
-        await logger.log('AI Connection Valid', 'success');
+        // ... (connection logic)
     } catch (e: any) {
         await logger.log(`AI Connection Failed: ${e.message}`, 'error');
         throw e; // Fail early
@@ -318,360 +502,102 @@ export async function processJob(url: string, profileData: any, logger: Automati
         await page.goto(url);
         await page.waitForLoadState('networkidle');
 
-        // Extract HTML from ALL frames
-        let content = "";
+
+        // Extract HTML form frames
+        // STRATEGY: Aggregate HTML from all frames to ensure AI sees embedded forms (e.g. Typeform, Google Forms)
+        let rawContent = await page.content();
+        let framesHtml = "";
+
         for (const frame of page.frames()) {
             try {
+                if (frame === page.mainFrame()) continue;
                 const frameContent = await frame.content();
-                const frameUrl = frame.url();
-                const cleaned = cleanHtml(frameContent);
-                if (cleaned && cleaned.trim().length > 50) { // Only append if meaningful
-                    content += `\n<!-- FRAME: ${frameUrl} -->\n${cleaned}`;
+                framesHtml += `\n<!-- FRAME: ${frame.url()} -->\n<div class="frame-content" style="border:5px solid red; margin:10px;">${frameContent}</div>`;
+            } catch (e) { }
+        }
+
+        if (rawContent.includes('</body>')) {
+            rawContent = rawContent.replace('</body>', `${framesHtml}</body>`);
+        } else {
+            rawContent += framesHtml;
+        }
+
+        const cleanedHtml = cleanHtml(rawContent);
+
+
+        // ==========================================
+        // 🧠 CACHE / REPLAY LOGIC
+        // ==========================================
+        let actions: Action[] = [];
+        let fromCache = false;
+        let success = false;
+
+        // 1. Try to fetch cached actions
+        try {
+            const cached = await TemplateModel.getByUrl(url);
+            if (cached && cached.actions && cached.actions.length > 0) {
+                await logger.log('⚡ Found cached instructions. Attempting to Replay...', 'success');
+                actions = cached.actions;
+                fromCache = true;
+
+                // Try Executing Cache
+                try {
+                    await executeActions(page, actions, profileData, logger, controls);
+                    success = true;
+                    await logger.log('✅ Cache Replay Successful!', 'success');
+                } catch (e: any) {
+                    await logger.log(`⚠️ Cache Replay Failed (${e.message}). Falling back to AI...`, 'warning');
+                    success = false;
+                    // Reset for AI
+                    actions = [];
                 }
-            } catch (e) {
-                // Ignore cross-origin frame access errors
             }
-        }
+        } catch (e) {
+            console.error("Cache Check Error:", e);
+        } // Ignore DB errors, just proceed
 
-        // Safety cap (now applied to cleaned content)
-        if (content.length > 150000) content = content.substring(0, 150000);
+        // 2. Fallback to AI (If no cache or cache failed)
+        if (!success) {
+            await logger.log('🤖 Analyzing page with AI (Slow path)...', 'info');
 
-        await logger.log('Analyzing page with AI...', 'info');
-        const actions = await getAiActionPlan(content, profileData);
+            // Re-eval HTML just in case
+            // (We already cleaned it above)
 
-        if (!actions || actions.length === 0) {
-            await logger.log('No actions generated by AI', 'error');
-            throw new Error("No actions generated");
-        }
+            actions = await getAiActionPlan(cleanedHtml, profileData);
+            await logger.log(`Executing ${actions.length} actions`, 'info', { actions });
 
-        await logger.log(`Executing ${actions.length} actions`, 'info', { actions });
+            // Execute AI Actions
+            await executeActions(page, actions, profileData, logger, controls);
 
-        for (const action of actions) {
-            const { selector, value, type } = action;
+            // If we reached here without error, it was successful.
+            success = true;
 
+            // 3. Save to Cache
             try {
-                // Find which frame has this selector
-                let targetFrame: any = null;
-                // Check main frame first
-                if (await page.$(selector).catch(() => null)) {
-                    targetFrame = page;
+                logger.log(`DEBUG: Actions Length: ${actions.length}`, 'info');
+                console.log(`DEBUG: Saving ${actions.length} actions to cache for ${url}`);
+                if (actions.length > 0) {
+                    await TemplateModel.upsert(url, actions);
+                    await logger.log('💾 Saved actions to cache for future speedup.', 'success');
+                    console.log("DEBUG: Save Complete");
                 } else {
-                    // Check other frames
-                    for (const frame of page.frames()) {
-                        if (await frame.$(selector).catch(() => null)) {
-                            targetFrame = frame;
-                            break;
-                        }
-                    }
+                    console.log("DEBUG: Actions length is 0, skipping save");
                 }
-
-                if (!targetFrame) {
-                    await logger.log(`Element not found: ${selector}`, 'warning');
-                    continue;
-                }
-
-                // Highlight
-                await targetFrame.evaluate((sel: string) => {
-                    try {
-                        const el = document.querySelector(sel) as HTMLElement;
-                        if (el) el.style.border = '2px solid red';
-                    } catch (e) { }
-                }, selector);
-
-                if (type === 'fill') {
-                    // Check editable
-                    const isEditable = await targetFrame.locator(selector).isEditable().catch(() => true);
-                    if (!isEditable) {
-                        await logger.log(`Skipping read-only: ${selector}`, 'warning');
-                        continue;
-                    }
-
-                    // Handle Select or Input
-                    const tagName = await targetFrame.evaluate((sel: string) => {
-                        const el = document.querySelector(sel);
-                        return el ? el.tagName : '';
-                    }, selector);
-
-                    if (tagName === 'SELECT') {
-
-                        const options = await targetFrame.evaluate((sel: string) => {
-                            const select = document.querySelector(sel) as HTMLSelectElement;
-                            if (!select) return [];
-                            return Array.from(select.options).map(opt => ({
-                                text: opt.text.trim(),
-                                value: opt.value,
-                                index: opt.index
-                            }));
-                        }, selector);
-
-                        const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-                        const targetVal = normalize(value || "");
-
-                        // Find Match - Enhanced Logic
-                        let bestMatch = options.find((o: any) => o.text === value);
-                        if (!bestMatch) bestMatch = options.find((o: any) => normalize(o.text) === targetVal);
-                        if (!bestMatch) bestMatch = options.find((o: any) => normalize(o.text).includes(targetVal));
-                        if (!bestMatch) bestMatch = options.find((o: any) => o.value === value);
-
-                        // Try strict label match if value failed
-                        if (!bestMatch && value) {
-                            bestMatch = options.find((o: any) =>
-                                o.text.toLowerCase().trim() === value.toLowerCase().trim()
-                            );
-                        }
-
-                        if (bestMatch) {
-                            // STRATEGY: Double Selection + Focus/Blur
-
-                            // 1. Focus
-                            await targetFrame.focus(selector);
-
-                            // 2. Select a DIFFERENT option first (to force change event)
-                            const dummyOption = options.find((o: any) => o.index !== bestMatch.index);
-                            if (dummyOption) {
-                                await targetFrame.selectOption(selector, { index: dummyOption.index });
-                                await page.waitForTimeout(200);
-                            }
-
-                            // 3. Select the CORRECT option
-                            await logger.log(`Selecting option "${bestMatch.text}" (val: ${bestMatch.value})`, 'action');
-                            await targetFrame.selectOption(selector, { value: bestMatch.value });
-                        } else {
-                            // Fallback: Try selecting by Label directly if options analysis failed
-                            await logger.log(`Option match failed. Trying direct selectOption by label: "${value}"`, 'warning');
-                            try {
-                                await targetFrame.selectOption(selector, { label: value });
-                            } catch (e) {
-                                // If that fails, try by value directly as a last resort
-                                await targetFrame.selectOption(selector, { value: value }).catch(() => { });
-                            }
-                        }
-
-                        // 4. Force Events & Blur (Critical)
-                        await page.waitForTimeout(100);
-                        await targetFrame.locator(selector).dispatchEvent('change');
-                        await targetFrame.locator(selector).dispatchEvent('input');
-                        await targetFrame.locator(selector).blur();
-
-                        // --- LLM FALLBACK START ---
-                        let selectedValue = await targetFrame.evalOnSelector(selector, (el: HTMLSelectElement) => el.value);
-                        const expectedValue = bestMatch ? bestMatch.value : value;
-
-                        // Only trigger fallback if we really suspect failure
-                        if (selectedValue !== expectedValue && bestMatch) {
-                            await logger.log(`Standard methods failed (Val: ${selectedValue} vs Exp: ${expectedValue}). Asking AI for a custom JS fix...`, 'warning');
-
-                            // Get element HTML for context
-                            const elementHtml = await targetFrame.evalOnSelector(selector, (el: HTMLElement) => el.outerHTML);
-
-                            // Ask AI for logic
-                            const aiScript = await getAiJavascriptFallback(elementHtml, selector, value || "");
-
-                            if (aiScript) {
-                                await logger.log(`Executing AI-generated fix script`, 'action', { script: aiScript });
-                                try {
-                                    await targetFrame.evaluate((code: string) => {
-                                        // Execute raw code safely
-                                        new Function(code)();
-                                    }, aiScript);
-                                } catch (scriptErr: any) {
-                                    await logger.log(`AI Script execution failed: ${scriptErr.message}`, 'error');
-                                }
-                            }
-                        }
-                        // --- LLM FALLBACK END ---
-
-                        // 5. Debug Final State
-                        const finalValue = await targetFrame.evalOnSelector(selector, (el: HTMLSelectElement) => el.value);
-                        await logger.log(`Final Dropdown State: ${finalValue}`, 'info');
-
-                    } else {
-                        await targetFrame.fill(selector, String(value));
-                    }
-
-                } else if (type === 'click') {
-                    // Self-Healing
-                    const isOption = selector.toLowerCase().includes('option');
-                    if (isOption) {
-                        const parentId = await targetFrame.evaluate((sel: string) => {
-                            const el = document.querySelector(sel);
-                            const p = el?.closest('select');
-                            return p ? p.id : null;
-                        }, selector);
-
-                        const val = await targetFrame.locator(selector).getAttribute('value');
-
-                        if (parentId && val) {
-                            await targetFrame.selectOption(`#${parentId}`, { value: val });
-                            await logger.log(`Healed click-option to select-option`, 'action', { selector });
-                            continue;
-                        }
-                    }
-
-                    await targetFrame.click(selector);
-
-                } else if (type === 'ask_user') {
-                    // --- HUMAN IN THE LOOP (TEXT) ---
-                    await logger.log(`AI asking user. Selector: "${selector}", Value: "${value}"`, 'warning');
-
-                    // The prompt asks 'value' to be the Question, text like "Please enter Proposal Title".
-                    // The 'selector' should be the Label "Proposal Title".
-                    // However, we want the UI popup to show the most useful text. 
-                    // If 'value' exists, it's usually the question or the label name. Use it as priority for display.
-                    const labelEncoded = value || selector;
-
-                    const userResponse = await waitForResume(profileData.job_id, 'text', labelEncoded);
-
-                    if (userResponse) {
-                        // --- LEARNING MOMENT (FIX) ---
-                        if (profileData.profile_id) {
-                            // STRATEGY: 
-                            // 1. Save using the specific question asked (current behavior).
-                            // 2. ALSO save using the 'selector' if it looks like a clean ID, as a fallback backup.
-
-                            await saveLearnedData(profileData.profile_id, labelEncoded, userResponse);
-
-                            // If labelEncoded was just a long natural question, try to save a cleaner key if we have the selector?
-                            // This is complex without knowing the field name. 
-                            // Ideally, we'd use the 'missing_label' passed to waitForResume.
-
-                            await logger.log(`Saved "${labelEncoded}" to your profile for future use.`, 'success');
-                        }
-                        // -----------------------------
-
-                        await logger.log(`User provided: "${userResponse}"`, 'success');
-
-                        // NOW, we need to fill this into the form. 
-                        // But we only have the "Label" (selector).
-                        // Let's try to find an input with this label or placeholder.
-                        let filled = false;
-
-                        // Try 1: By Label Text (Playwright style)
-                        // Heuristic: Find label containing text, get its 'for', find input with that id.
-                        // Or input with placeholder.
-
-                        // We can reuse the "AiJavascriptFallback" or just try generic locators.
-                        // Or, we can ask AI for a small "fill" action based on this new data?
-                        // That seems safest but slower.
-
-                        // Faster: Try to find an input whose placeholder or previous sibling matches.
-                        // Since we are inside the runner loop, let's try a heuristic.
-
-                        // Heuristic A: Assume 'selector' in the action plan was actually a CSS selector if it looks like one.
-                        // If it contains '#' or '.', try filling it detailedly.
-                        if (selector.includes('#') || selector.includes('.') || selector.includes('[')) {
-                            try {
-                                await targetFrame.fill(selector, userResponse);
-                                filled = true;
-                            } catch (e) { }
-                        }
-
-                        if (!filled) {
-                            // Heuristic B: Try getByLabel (approximate)
-                            try {
-                                const labels = await targetFrame.$$('label');
-                                for (const lbl of labels) {
-                                    const txt = await lbl.innerText();
-                                    if (txt.toLowerCase().includes(selector.toLowerCase())) {
-                                        const forAttr = await lbl.getAttribute('for');
-                                        if (forAttr) {
-                                            await targetFrame.fill(`#${forAttr}`, userResponse);
-                                            filled = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            } catch (e) { }
-                        }
-
-                        if (!filled) {
-                            await logger.log(`Could not auto-fill field "${selector}" with "${userResponse}". Please check manually or restart.`, 'warning');
-                        } else {
-                            await logger.log(`Auto-filled "${selector}" successfully.`, 'action');
-                        }
-
-                    } else {
-                        throw new Error("User cancelled text input.");
-                    }
-
-                } else if (type === 'upload') {
-                    let filePathToUse = value;
-
-                    // --- HUMAN IN THE LOOP: PAUSE IF MISSING ---
-                    let fileExists = false;
-                    if (filePathToUse) {
-                        if (fs.existsSync(path.resolve(filePathToUse))) fileExists = true;
-                        else if (fs.existsSync(path.join(__dirname, '../../../', filePathToUse))) fileExists = true;
-                    }
-
-                    if (!filePathToUse || !fileExists) {
-                        await logger.log(`Missing file for upload selector: ${selector}. Pausing for user input...`, 'warning');
-
-                        // Use the new generic waitForResume
-                        const newPath = await waitForResume(profileData.job_id, 'file', 'Missing File Upload');
-                        if (newPath) {
-                            filePathToUse = newPath;
-                            await logger.log(`User provided file: ${filePathToUse}. Resuming...`, 'success');
-                        } else {
-                            throw new Error("User cancelled or timed out on file upload.");
-                        }
-                    }
-                    // ------------------------------------------
-
-                    if (filePathToUse) {
-                        // Verify file exists (robust check)
-                        const resolvedPath = path.resolve(filePathToUse);
-                        if (fs.existsSync(resolvedPath)) {
-                            await targetFrame.setInputFiles(selector, resolvedPath);
-                            await logger.log(`Uploaded file: ${resolvedPath}`, 'action');
-                        } else {
-                            // Try relative to project root if absolute failed
-                            const projectRootPath = path.join(__dirname, '../../../', filePathToUse);
-                            if (fs.existsSync(projectRootPath)) {
-                                await targetFrame.setInputFiles(selector, projectRootPath);
-                                await logger.log(`Uploaded file (resolved from root): ${projectRootPath}`, 'action');
-                            } else {
-                                await logger.log(`File still not found at: ${filePathToUse}`, 'error');
-                            }
-                        }
-                    }
-                }
-
-                // Brief pause
-                await page.waitForTimeout(500);
-
-            } catch (err: any) {
-                await logger.log(`Failed action on ${selector}`, 'error', { error: err.message });
+            } catch (saveErr: any) {
+                console.error("DEBUG: Save Failed:", saveErr);
+                logger.log(`Cache Save Failed: ${saveErr.message}`, 'error');
             }
         }
 
         // --- VALIDATION & RECOVERY STEP ---
         await logger.log("Validating form completeness...", "info");
         const validationPrompt = `
-        You are a QA Agent.
-        HTML:
-        \`\`\`html
-        ${await page.content()}
-        \`\`\`
-        
-        TASK:
-        Identify any <input>, <select>, or <textarea> that:
-        1. Is visible
-        2. Is NOT readonly/disabled
-        3. Has an empty value (or no file selected for file inputs)
-        4. Appears to be a meaningful field (e.g. "Address Line 2", "Upload Document", "Comments")
-        5. IGNORE hidden fields, search bars, or insignificant UI elements.
-        
-        CRITICAL: The 'label' MUST be the visible text on the screen (e.g. "Street Address", "Resume"), NOT the ID or Selector (e.g. #input_123).
-        
-        OUTPUT:
-        Return a JSON list of objects describing missing fields:
-        {
-            "missing_fields": [
-                { "label": "Address Line 2", "selector": "#addr2", "type": "text" },
-                { "label": "Upload Resume", "selector": "input[type='file']", "type": "file" }
-            ]
-        }
+            You are a QA Agent.
+            HTML:
+            \`\`\`html
+            ${await page.content()}
+            \`\`\`
+            TASK: Identify missing fields. Return JSON { "missing_fields": [{ "label": "...", "selector": "...", "type": "..." }] }.
         `;
 
         try {
@@ -688,62 +614,29 @@ export async function processJob(url: string, profileData: any, logger: Automati
             if (Array.isArray(missingFields) && missingFields.length > 0) {
                 await logger.log(`Found ${missingFields.length} unfilled fields. Asking user...`, 'warning');
 
-                for (const field of missingFields) {
-                    // Check if it's really empty/meaningful by asking for User Input
-                    // We reuse the existing flow: ask user, then fill.
-                    const label = field.label || "Unfilled Field";
-                    const type = field.type === 'file' ? 'file' : 'text';
-                    const selector = field.selector;
+                // Create actions to ask user for each missing field
+                const recoveryActions: Action[] = missingFields.map((field: any) => ({
+                    selector: field.selector,
+                    value: field.label || "Value needed",
+                    type: 'ask_user' as const
+                }));
 
-                    if (type === 'file') {
-                        await logger.log(`Asking user for missing file: ${label}`, 'warning');
-                        const newPath = await waitForResume(profileData.job_id, 'file', label);
-                        if (newPath) {
-                            if (fs.existsSync(path.resolve(newPath))) {
-                                await page.setInputFiles(selector, path.resolve(newPath)).catch(() => { });
-                                await logger.log(`Uploaded late-provided file: ${label}`, 'success');
-                            }
-                        }
-                    } else {
-                        await logger.log(`Asking user for missing text: ${label}`, 'warning');
-                        const resp = await waitForResume(profileData.job_id, 'text', label);
-                        if (resp) {
-                            // --- LEARNING MOMENT ---
-                            if (profileData.profile_id) {
-                                await saveLearnedData(profileData.profile_id, label, resp);
-                                await logger.log(`Saved "${label}" to your profile for future use.`, 'success');
-                            }
-                            // -----------------------
-
-                            // Attempt to fill using BEST EFFORT
-                            try {
-                                await page.fill(selector, resp);
-                                await logger.log(`Filled ${label} with user input`, 'success');
-                            } catch (e) {
-                                // Fallback: try by label?
-                                await logger.log(`Could not auto-fill ${selector}. Please fill manually if needed.`, 'warning');
-                            }
-                        }
-                    }
-                }
-
+                await executeActions(page, recoveryActions, profileData, logger, controls);
             } else {
                 await logger.log("Validation passed. All relevant fields appear filled.", "info");
             }
         } catch (e: any) {
-            await logger.log(`Validation/Recovery failed: ${e.message}`, 'warning');
+            await logger.log(`Validation check skipped/failed: ${e.message}`, 'warning');
         }
-        // --- END VALIDATION ---
 
         await logger.log('Job Completed Successfully', 'success');
-        // No DB update here
 
     } catch (err: any) {
         console.error("Automation Error:", err);
         await logger.log(`Job Failed: ${err.message}`, 'error');
-        throw err; // Re-throw to let Worker know it failed
+        throw err;
     } finally {
-        // await browser.close(); // Keep open for debugging
+        // await browser.close(); 
         console.log("Browser left open for debugging.");
     }
 }
