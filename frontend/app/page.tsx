@@ -37,7 +37,12 @@ export default function DashboardPage() {
     fetch(`${SERVER_URL}/jobs`, { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
-        setJobs(data);
+        if (Array.isArray(data)) {
+          setJobs(data);
+        } else {
+          console.error("Jobs fetch error:", data);
+          setJobs([]);
+        }
         setInitialLoading(false);
       })
       .catch((err) => console.error("Failed to fetch jobs:", err));
@@ -88,7 +93,12 @@ export default function DashboardPage() {
     try {
       const res = await fetch(`${SERVER_URL}/jobs/${jobId}/logs`, { credentials: 'include' });
       const data = await res.json();
-      setLogs(data);
+      if (Array.isArray(data)) {
+        setLogs(data);
+      } else {
+        console.error("Logs fetch error:", data);
+        setLogs([]);
+      }
     } catch (err) {
       console.error(err);
     }

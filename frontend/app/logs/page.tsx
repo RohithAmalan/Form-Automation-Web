@@ -13,10 +13,15 @@ export default function SystemLogsPage() {
     const [viewMode, setViewMode] = useState<'timeline' | 'table'>('timeline');
 
     const fetchLogs = () => {
-        fetch(`${SERVER_URL}/logs`)
+        fetch(`${SERVER_URL}/logs`, { credentials: 'include' })
             .then((res) => res.json())
             .then((data) => {
-                setLogs(data);
+                if (Array.isArray(data)) {
+                    setLogs(data);
+                } else {
+                    console.error("Logs format error or unauthorized:", data);
+                    setLogs([]); // Default to empty to prevent crash
+                }
                 setLoading(false);
             })
             .catch((err) => console.error("Failed to fetch logs:", err));

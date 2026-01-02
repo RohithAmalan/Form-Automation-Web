@@ -4,12 +4,15 @@ import path from 'path';
 import fs from 'fs';
 import { FormController } from '../controllers/form.controller';
 
+import { ensureAuthenticated, ensureAdmin } from '../middleware/auth';
+
 const router = Router();
 
 // --- Multer Config ---
 // Ensure uploads directory exists relative to project root (since we are in backend/src/routes)
-// Project root is ../../../
-const uploadDir = path.join(__dirname, '../../../uploads');
+// Ensure uploads directory exists relative to project root (since we are in backend/src/routes)
+// New Path: backend/uploads (../../uploads)
+const uploadDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -27,30 +30,31 @@ const upload = multer({ storage: storage });
 
 // --- Routes ---
 
-// Profiles
-router.get('/profiles', FormController.getProfiles);
-router.post('/profiles', FormController.createProfile);
-router.put('/profiles/:id', FormController.updateProfile);
-router.delete('/profiles/:id', FormController.deleteProfile);
+// Profiles (Authenticated Users)
+router.get('/profiles', ensureAuthenticated, FormController.getProfiles);
+router.post('/profiles', ensureAuthenticated, FormController.createProfile);
+router.put('/profiles/:id', ensureAuthenticated, FormController.updateProfile);
+router.delete('/profiles/:id', ensureAuthenticated, FormController.deleteProfile);
 
-// Jobs
-router.get('/jobs', FormController.getJobs);
-router.post('/jobs', upload.array('files', 10), FormController.createJob);
-router.delete('/jobs/:id', FormController.deleteJob);
-router.delete('/jobs', FormController.deleteAllJobs); // New Route
-router.post('/jobs/:id/pause', FormController.pauseJob);
-router.post('/jobs/:id/continue', FormController.continueJob);
-router.post('/jobs/:id/resume', upload.single('file'), FormController.resumeJob);
+// Jobs (Queue Functions -> Admin Only)
+router.get('/jobs', ensureAuthenticated, FormController.getJobs); // View is allowed for Auth users
+router.post('/jobs', ensureAdmin, upload.array('files', 10), FormController.createJob); // Create is Admin
+router.delete('/jobs/:id', ensureAdmin, FormController.deleteJob);
+router.delete('/jobs', ensureAdmin, FormController.deleteAllJobs);
+router.post('/jobs/:id/pause', ensureAdmin, FormController.pauseJob);
+router.post('/jobs/:id/continue', ensureAdmin, FormController.continueJob);
+router.post('/jobs/:id/resume', ensureAdmin, upload.single('file'), FormController.resumeJob);
+
 // Logs - Moved to top
 console.log("Registering /logs route (TOP)");
-router.get('/logs', (req, res) => {
+router.get('/logs', ensureAuthenticated, (req, res) => {
     console.log("Hit /logs (Inline)");
     FormController.getSystemLogs(req, res);
 });
 
 // Logs
 // router.get('/logs', ...); // MOVED
-router.get('/jobs/:id/logs', FormController.getJobLogs);
+router.get('/jobs/:id/logs', ensureAuthenticated, FormController.getJobLogs);
 
 // Settings
 router.get('/settings/health', FormController.getSystemHealth);
