@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import * as cheerio from 'cheerio';
+import { withRetry } from '../utils/resilience';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
@@ -22,7 +23,23 @@ const openai = new OpenAI({
     }
 });
 
-const MODEL = "openai/gpt-4o-mini";
+const PRIMARY_MODEL = "openai/gpt-4o-mini";
+const FALLBACK_MODEL = "google/gemini-flash-1.5"; // Free tier model on OpenRouter
+
+// Helper to handle AI Completion with Fallback
+async function completionWithFallback(params: any) {
+    try {
+        console.log(`[AI] Requesting completion with ${PRIMARY_MODEL}...`);
+        return await openai.chat.completions.create({ ...params, model: PRIMARY_MODEL });
+    } catch (e: any) {
+        // Check for Credit Limit (402) or other likely "refusal" errors
+        if (e.status === 402 || (e.message && e.message.toLowerCase().includes('credits'))) {
+            console.warn(`⚠️ Primary Model Failed (Credits). Switching to Fallback: ${FALLBACK_MODEL}`);
+            return await openai.chat.completions.create({ ...params, model: FALLBACK_MODEL });
+        }
+        throw e;
+    }
+}
 
 // Helper to clean HTML using Cheerio
 function cleanHtml(rawHtml: string): string {
@@ -83,8 +100,7 @@ async function getAiJavascriptFallback(html: string, selector: string, value: st
     `;
 
     try {
-        const completion = await openai.chat.completions.create({
-            model: MODEL,
+        const completion = await completionWithFallback({
             messages: [
                 { role: "system", content: "You are a coding machine. Return only code." },
                 { role: "user", content: prompt }
@@ -111,6 +127,67 @@ import { TemplateModel } from '../models/template.model';
 // Helper for Manual Pause
 // [Removed local checkForManualPause]
 
+// --- HELPER: FUZZY MATCH KEY FINDER ---
+// --- HELPER: FUZZY MATCH KEY FINDER ---
+function findBestProfileMatch(label: string, data: any): string | null {
+    if (!label || !data) return null;
+
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim(); // Keep spaces for tokenizing
+    const targetRaw = normalize(label);
+    const targetTokens = targetRaw.split(/\s+/).filter(t => t.length > 2 || !isNaN(Number(t))); // Filter short words, keep numbers
+
+    let bestKey: string | null = null;
+    let highestScore = 0;
+
+    for (const key of Object.keys(data)) {
+        if (!data[key]) continue; // Skip empty profile values matching
+
+        const keyRaw = normalize(key);
+
+        // 1. Direct Normalization Match (strongest)
+        if (keyRaw.replace(/\s/g, '') === targetRaw.replace(/\s/g, '')) return String(data[key]);
+
+        // 2. Token Overlap Score
+        const keyTokens = keyRaw.split(/\s+/).filter(t => t.length > 2 || !isNaN(Number(t)));
+
+        // Count overlapping tokens
+        let overlap = 0;
+        for (const t of targetTokens) {
+            if (keyTokens.includes(t)) overlap++;
+        }
+
+        // Score = Overlap / Max(Length) to penalize huge mismatches? 
+        // No, simple overlap count is robust for "Address Line 2" vs "What is your Address Line 2"
+        // But we want to prefer "Address Line 2" (3 matches) over "Address" (1 match)
+
+        if (overlap > highestScore) {
+            highestScore = overlap;
+            bestKey = key;
+        }
+    }
+
+    // Threshold: At least 2 meaningful tokens matching (e.g. "Address" + "2") OR 1 very unique long token?
+    // Let's say if > 50% match of the shorter string?
+    // For now: if score >= 2 (e.g. "Address" + "Line"), accept.
+    // Or if score >= 1 and token length > 5 (e.g. "LinkedIn").
+    if (bestKey && highestScore >= 1) {
+        // Verify relevance: ensure we didn't just match "Line" in "Address Line 1" vs "Address Line 2"
+        // If target has "2" and candidate does NOT, reject.
+        const targetHasNumber = targetRaw.match(/\d+/);
+        const keyHasNumber = normalize(bestKey).match(/\d+/);
+
+        if (targetHasNumber && keyHasNumber && targetHasNumber[0] !== keyHasNumber[0]) {
+            // Numbers differ (e.g. "Address 1" vs "Address 2") -> REJECT
+            return null;
+        }
+
+        return String(data[bestKey]);
+    }
+
+    return null;
+};
+
+
 
 async function getAiActionPlan(html: string, profileData: any): Promise<Action[]> {
     // Check if uploaded_file_path contains JSON array or single string
@@ -130,6 +207,9 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
     const filePathInfo = hasFile
         ? `Files available to upload: ${fileListStr}. Look for <input type="file">.`
         : "No file path provided in profile. If <input type='file'> exists, you MUST ask the user for it.";
+
+
+
 
     const prompt = `
     You are an expert browser automation agent.
@@ -161,6 +241,10 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
        - Use 'fill' type.
        - The 'value' MUST be the text of the option you want to select.
     5. Use 'click' for buttons, checkboxes, AND RADIO BUTTONS.
+       - FOR BUTTONS ("Submit", "Next", "Continue"):
+         - PRIORITIZE using the text content selector format: "text=Next Step" or "text=Submit".
+         - Do NOT use generic classes like ".btn" or ".active" unless there is no text.
+         - Avoid ".active" class selectors as they often refer to state indicators, not the clickable button.
     6. For file uploads (<input type="file">):
        - Use type 'upload'.
        - The 'value' should be the JSON stringified array of paths: '${fileListStr}'.
@@ -185,11 +269,19 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
          - If <input type="file"> exists and profileData.uploaded_file_path is missing/empty:
          - YOU MUST GENERATE type "upload" with value "". This will trigger the system to pause and ask the user.
        - Do not skip "Address Line 2" or other optional fields if they are visible.
+       
+    10. PROHIBITED VALUES:
+       - NEVER use the string "undefined" or "null" as a value. 
+       - If you do not know the value, use type "ask_user".
+    
+    11. FUZZY MATCHING PROFILE KEYS:
+       - The profileData keys might be imperfect (e.g. phrased as questions like "Please provide Address Line 2", or "What is your name?").
+       - If a field label matches a key in profileData loosely, USE IT.
+       - Example: If field is "Address Line 2" and profile has "Please provide Address Line 2": "Apt 4B", use "Apt 4B".
     `;
 
     try {
-        const completion = await openai.chat.completions.create({
-            model: MODEL,
+        const completion = await completionWithFallback({
             messages: [
                 { role: "system", content: "You are a helpful automation assistant returning raw JSON." },
                 { role: "user", content: prompt }
@@ -231,8 +323,21 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
     }
 }
 
-async function executeActions(page: Page, actions: Action[], profileData: any, logger: AutomationLogger, controls: JobControls) {
+async function executeActions(
+    page: Page,
+    actions: Action[],
+    profileData: any,
+    logger: AutomationLogger,
+    controls: JobControls
+): Promise<{ didNavigate: boolean; failedCount: number }> {
+    let didPerformNavigation = false;
+    let failedActionsCount = 0;
+
+    // --- ACTION LOOP ---
     for (const action of actions) {
+        // Validation check for empty actions
+        if (!action || !action.type) continue;
+
         // --- MANUAL PAUSE CHECK ---
         await controls.checkPause();
         // --------------------------
@@ -355,7 +460,78 @@ async function executeActions(page: Page, actions: Action[], profileData: any, l
                     await logger.log(`Final Dropdown State: ${finalValue}`, 'info');
 
                 } else {
-                    await targetFrame.fill(selector, String(value));
+                    // Prevent "undefined" string
+                    if (String(value) === 'undefined' || value === null || value === undefined) {
+                        await logger.log(`Safety Guard: Prevented filling "undefined" into ${selector}. Converting to ask_user.`, 'warning');
+                        // Dynamically switch to ask_user processing
+                        // Since we are inside the loop, we can't easily change the type of the CURRENT action structure being iterated
+                        // But we can just execute the ask_user logic right here:
+
+                        // But we can just execute the ask_user logic right here:
+
+                        // Try to get a better label for the key
+                        const labelText = await targetFrame.evaluate((sel: string) => {
+                            const el = document.querySelector(sel) as HTMLInputElement;
+                            if (!el) return null;
+                            if (el.labels && el.labels.length > 0) return el.labels[0].innerText.trim();
+                            if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+                            if (el.getAttribute('placeholder')) return el.getAttribute('placeholder');
+                            return null;
+                        }, selector);
+
+                        const labelEncoded = labelText || selector;
+
+                        // Try to fuzzy match from profile data first
+                        const match = findBestProfileMatch(labelEncoded, profileData);
+                        let filledCount = 0;
+
+                        if (match) {
+                            await logger.log(`Auto-answered "${labelEncoded}" using profile data (Fuzzy Match).`, 'success');
+
+                            // Try to fill
+                            try {
+                                await targetFrame.fill(selector, match);
+                                // Explicit Blur
+                                try { await targetFrame.locator(selector).blur(); } catch { }
+                                filledCount++;
+                            } catch (e) {
+                                // CRITICAL FIX: If filling fails (likely hidden), DO NOT ask user again.
+                                // Asking user won't make the hidden field interactable.
+                                await logger.log(`Could not auto-fill field "${selector}" (likely hidden/obstructed). Skipping...`, 'warning');
+                                failedActionsCount++;
+                            }
+                        } else {
+                            // Only ask user if we genuinely don't have data
+                            if (!profileData[labelEncoded] && !profileData[labelText]) { // Check both labelEncoded and original labelText
+                                const userResponse = await controls.askUser('text', `Missing value for ${labelEncoded} (${selector})`);
+                                if (userResponse) {
+                                    if (profileData.profile_id) {
+                                        await controls.saveLearnedData(labelEncoded, userResponse);
+                                        await logger.log(`Saved "${labelEncoded}" to your profile for future use.`, 'success');
+                                    }
+                                    await targetFrame.fill(selector, userResponse);
+                                    try { await targetFrame.locator(selector).blur(); } catch { }
+                                    filledCount++;
+                                }
+                            }
+                        }
+                    } else {
+                        // Date Handling: ISO conversion
+                        const isDate = await targetFrame.locator(selector).getAttribute('type') === 'date';
+                        if (isDate) {
+                            const dateVal = new Date(String(value));
+                            if (!isNaN(dateVal.getTime())) {
+                                const iso = dateVal.toISOString().split('T')[0];
+                                await targetFrame.fill(selector, iso);
+                            } else {
+                                await targetFrame.fill(selector, String(value));
+                            }
+                        } else {
+                            await targetFrame.fill(selector, String(value));
+                        }
+                    }
+                    // Explicit Blur to trigger validation
+                    try { await targetFrame.locator(selector).blur(); } catch (e) { }
                 }
 
             } else if (type === 'click') {
@@ -377,33 +553,79 @@ async function executeActions(page: Page, actions: Action[], profileData: any, l
                     }
                 }
 
-                await targetFrame.click(selector);
-                await page.waitForTimeout(1000); // Wait for reaction
+                // Click Logic
+                try {
+                    await targetFrame.click(selector, { force: true, timeout: 5000 });
+                    // FLAG: We performed a navigation action
+                    didPerformNavigation = true;
+                } catch (clickErr: any) {
+                    await logger.log(`Standard click failed (${clickErr.message}). Retrying with JS click...`, 'warning');
+                    await targetFrame.evaluate((sel: string) => {
+                        const el = document.querySelector(sel) as HTMLElement;
+                        if (el) el.click();
+                    }, selector);
+                    didPerformNavigation = true;
+                }
+
+                // SMART WAIT: Wait for network to settle, but don't hang forever
+                try {
+                    await page.waitForLoadState('networkidle', { timeout: 3000 });
+                } catch {
+                    // If network never settles (streaming/ads), just wait a safe buffer
+                    await page.waitForTimeout(1000);
+                }
 
             } else if (type === 'ask_user') {
                 // --- HUMAN IN THE LOOP (TEXT) ---
                 await logger.log(`AI asking user. Selector: "${selector}", Value: "${value}"`, 'warning');
 
                 const labelEncoded = value || selector;
-                const userResponse = await controls.askUser('text', labelEncoded);
 
-                if (userResponse) {
-                    if (profileData.profile_id) {
-                        await controls.saveLearnedData(labelEncoded, userResponse);
+                // --- INTER CEPT: AUTO-ANSWER CHECK ---
+                const autoAnswer = findBestProfileMatch(labelEncoded, profileData);
+                let userResponse: string | null = null;
+
+                if (autoAnswer) {
+                    await logger.log(`Auto-answered "${labelEncoded}" using profile data (Fuzzy Match).`, 'success');
+                    userResponse = autoAnswer;
+                    // Simulate brief delay like a human
+                    await page.waitForTimeout(500);
+                } else {
+                    // Actual Human Loop
+                    userResponse = await controls.askUser('text', labelEncoded);
+
+                    // Check for cancellation (null response)
+                    if (userResponse === null) {
+                        throw new Error('Job stopped by user (Input Cancelled)');
+                    }
+                }
+
+                const userResponseFinal = userResponse; // TS lock
+
+                if (userResponseFinal) {
+                    // --- SKIP FIELD LOGIC ---
+                    if (userResponseFinal === 'SKIP_FIELD' || userResponseFinal === 'SKIP') {
+                        await logger.log(`Skipped field "${selector}" by user request.`, 'warning');
+                        continue;
+                    }
+
+                    if (profileData.profile_id && !autoAnswer) {
+                        // Only save if it wasn't already from the profile
+                        await controls.saveLearnedData(labelEncoded, userResponseFinal);
                         await logger.log(`Saved "${labelEncoded}" to your profile for future use.`, 'success');
                     }
-                    await logger.log(`User provided: "${userResponse}"`, 'success');
+                    if (!autoAnswer) await logger.log(`User provided: "${userResponseFinal}"`, 'success');
 
                     // Attempt auto-fill
                     let filled = false;
                     if (selector.includes('#') || selector.includes('.') || selector.includes('[')) {
                         try {
-                            await targetFrame.fill(selector, userResponse);
+                            await targetFrame.fill(selector, userResponseFinal);
                             filled = true;
                         } catch (e) { }
                     }
                     if (!filled) {
-                        await logger.log(`Could not auto-fill field "${selector}" with "${userResponse}". Please check manually.`, 'warning');
+                        await logger.log(`Could not auto-fill field "${selector}" with "${userResponseFinal}". Please check manually.`, 'warning');
                     } else {
                         await logger.log(`Auto-filled "${selector}" successfully.`, 'action');
                     }
@@ -471,9 +693,12 @@ async function executeActions(page: Page, actions: Action[], profileData: any, l
 
         } catch (err: any) {
             await logger.log(`Failed action on ${selector}`, 'error', { error: err.message });
+            failedActionsCount++;
         }
     }
+    return { didNavigate: didPerformNavigation, failedCount: failedActionsCount };
 }
+
 
 /**
  * Pure Automation Function
@@ -499,137 +724,304 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
 
     try {
         await logger.log('Navigating to URL...', 'info');
-        await page.goto(url);
-        await page.waitForLoadState('networkidle');
 
+        const navRetries = parseInt(process.env.MAX_RETRIES || '2', 10);
+        const navBackoff = parseInt(process.env.RETRY_BACKOFF_MS || '2000', 10);
+        const loadTimeout = parseInt(process.env.PAGE_LOAD_TIMEOUT_MS || '60000', 10);
+        const elementTimeout = parseInt(process.env.ELEMENT_WAIT_TIMEOUT_MS || '10000', 10);
 
-        // Extract HTML form frames
-        // STRATEGY: Aggregate HTML from all frames to ensure AI sees embedded forms (e.g. Typeform, Google Forms)
-        let rawContent = await page.content();
-        let framesHtml = "";
+        // Set Global Default Timeout for Elements
+        page.setDefaultTimeout(elementTimeout);
 
-        for (const frame of page.frames()) {
-            try {
-                if (frame === page.mainFrame()) continue;
-                const frameContent = await frame.content();
-                framesHtml += `\n<!-- FRAME: ${frame.url()} -->\n<div class="frame-content" style="border:5px solid red; margin:10px;">${frameContent}</div>`;
-            } catch (e) { }
-        }
-
-        if (rawContent.includes('</body>')) {
-            rawContent = rawContent.replace('</body>', `${framesHtml}</body>`);
-        } else {
-            rawContent += framesHtml;
-        }
-
-        const cleanedHtml = cleanHtml(rawContent);
+        await withRetry(async () => {
+            await page.goto(url, { timeout: loadTimeout });
+            await page.waitForLoadState('networkidle', { timeout: 30000 }); // Keep network idle separate or share? Let's keep 30s as sane default or maybe half loadTimeout
+        }, { retries: navRetries, backoff: navBackoff });
 
 
         // ==========================================
-        // 🧠 CACHE / REPLAY LOGIC
+        // 🔄 MULTI-STEP LOOP
         // ==========================================
-        let actions: Action[] = [];
-        let fromCache = false;
-        let success = false;
+        let stepCount = 0;
+        const MAX_STEPS = 15;
+        let lastActionWasNavigation = false;
 
-        // 1. Try to fetch cached actions
-        try {
-            const cached = await TemplateModel.getByUrl(url);
-            if (cached && cached.actions && cached.actions.length > 0) {
-                await logger.log('⚡ Found cached instructions. Attempting to Replay...', 'success');
-                actions = cached.actions;
-                fromCache = true;
+        // --- MAIN LOOP for Multi-Step / Wizard Forms ---
+        let jobCompleted = false;
+        while (!jobCompleted && stepCount < MAX_STEPS) {
+            stepCount++;
+            await logger.log(`🔄 Step ${stepCount}/${MAX_STEPS} Analysis...`, 'info');
 
-                // Try Executing Cache
-                try {
-                    await executeActions(page, actions, profileData, logger, controls);
-                    success = true;
-                    await logger.log('✅ Cache Replay Successful!', 'success');
-                } catch (e: any) {
-                    await logger.log(`⚠️ Cache Replay Failed (${e.message}). Falling back to AI...`, 'warning');
-                    success = false;
-                    // Reset for AI
-                    actions = [];
-                }
+            // Force wait if previous action was navigation to allow render
+            if (lastActionWasNavigation) {
+                await page.waitForTimeout(2000);
+                lastActionWasNavigation = false; // Reset
             }
-        } catch (e) {
-            console.error("Cache Check Error:", e);
-        } // Ignore DB errors, just proceed
 
-        // 2. Fallback to AI (If no cache or cache failed)
-        if (!success) {
-            await logger.log('🤖 Analyzing page with AI (Slow path)...', 'info');
+            // --- VISIBLE-ONLY CONTENT EXTRACTION ---
+            let rawContent = await page.evaluate(() => {
+                function isVisible(el: Element): boolean {
+                    // Check live styles
+                    const style = window.getComputedStyle(el);
 
-            // Re-eval HTML just in case
-            // (We already cleaned it above)
+                    // Critical checks for "hidden":
+                    if (style.display === 'none') return false;
+                    if (style.visibility === 'hidden') return false;
+                    if (style.opacity === '0') return false;
 
-            actions = await getAiActionPlan(cleanedHtml, profileData);
-            await logger.log(`Executing ${actions.length} actions`, 'info', { actions });
+                    // Dimensions check (sometimes elements are 0x0 but valid, but usually wizards hide sections causing 0x0)
+                    const rect = el.getBoundingClientRect();
+                    // Relaxed dimension check (some inputs might be small/custom), but sections should have size
+                    if (rect.width === 0 && rect.height === 0 && style.overflow === 'hidden') return false;
 
-            // Execute AI Actions
-            await executeActions(page, actions, profileData, logger, controls);
-
-            // If we reached here without error, it was successful.
-            success = true;
-
-            // 3. Save to Cache
-            try {
-                logger.log(`DEBUG: Actions Length: ${actions.length}`, 'info');
-                console.log(`DEBUG: Saving ${actions.length} actions to cache for ${url}`);
-                if (actions.length > 0) {
-                    await TemplateModel.upsert(url, actions);
-                    await logger.log('💾 Saved actions to cache for future speedup.', 'success');
-                    console.log("DEBUG: Save Complete");
-                } else {
-                    console.log("DEBUG: Actions length is 0, skipping save");
+                    return true;
                 }
-            } catch (saveErr: any) {
-                console.error("DEBUG: Save Failed:", saveErr);
-                logger.log(`Cache Save Failed: ${saveErr.message}`, 'error');
-            }
-        }
 
-        // --- VALIDATION & RECOVERY STEP ---
-        await logger.log("Validating form completeness...", "info");
-        const validationPrompt = `
-            You are a QA Agent.
-            HTML:
-            \`\`\`html
-            ${await page.content()}
-            \`\`\`
-            TASK: Identify missing fields. Return JSON { "missing_fields": [{ "label": "...", "selector": "...", "type": "..." }] }.
-        `;
+                function cloneVisible(node: Node): Node | null {
+                    // 1. Text Nodes: keep
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        return node.cloneNode(true);
+                    }
 
-        try {
-            const valCompletion = await openai.chat.completions.create({
-                model: MODEL,
-                messages: [{ role: "user", content: validationPrompt }],
-                response_format: { type: "json_object" },
-                max_tokens: 1000
+                    // 2. Comments: ignore or keep (ignore to save tokens)
+                    if (node.nodeType === Node.COMMENT_NODE) {
+                        return null;
+                    }
+
+                    // 3. Elements
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        const el = node as Element;
+                        if (!isVisible(el)) return null; // Prune this whole branch
+
+                        // Shallow clone
+                        const clone = el.cloneNode(false) as Element;
+
+                        // SYNC VALUES (Critical for AI to see filled inputs)
+                        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                            const val = (el as HTMLInputElement).value;
+                            if (val) clone.setAttribute('value', val); // Force attribute
+                        }
+                        if (el.tagName === 'SELECT') {
+                            const idx = (el as HTMLSelectElement).selectedIndex;
+                            if (idx !== -1) {
+                                const options = (el as HTMLSelectElement).options;
+                                if (options[idx]) clone.setAttribute('data-selected-text', options[idx].text);
+                                (clone as HTMLSelectElement).selectedIndex = idx;
+                            }
+                        }
+
+                        // Recurse children
+                        let hasVisibleChildren = false;
+                        for (const child of Array.from(el.childNodes)) {
+                            const childClone = cloneVisible(child);
+                            if (childClone) {
+                                clone.appendChild(childClone);
+                                hasVisibleChildren = true;
+                            }
+                        }
+
+                        // Optional: Prune empty structural divs if no text content? 
+                        // Risk: empty inputs. So keep everything that passed isVisible.
+                        return clone;
+                    }
+
+                    return null;
+                }
+
+                const visibleBody = cloneVisible(document.body);
+                return visibleBody ? (visibleBody as Element).outerHTML : "";
             });
-            const valContent = valCompletion.choices[0].message.content || "{}";
-            const valData = JSON.parse(valContent);
-            const missingFields = valData.missing_fields || [];
 
-            if (Array.isArray(missingFields) && missingFields.length > 0) {
-                await logger.log(`Found ${missingFields.length} unfilled fields. Asking user...`, 'warning');
-
-                // Create actions to ask user for each missing field
-                const recoveryActions: Action[] = missingFields.map((field: any) => ({
-                    selector: field.selector,
-                    value: field.label || "Value needed",
-                    type: 'ask_user' as const
-                }));
-
-                await executeActions(page, recoveryActions, profileData, logger, controls);
-            } else {
-                await logger.log("Validation passed. All relevant fields appear filled.", "info");
+            // Add frames (iframes are usually usually visible if relevant)
+            // Ideally we'd check frame visibility too, but keeping it simple for now (frames are handled separately anyway)
+            let framesHtml = "";
+            for (const frame of page.frames()) {
+                try {
+                    if (frame === page.mainFrame()) continue;
+                    // Only include if frame element is visible in main page? (Hard to check across contexts easily without frame handle)
+                    // For now, assume iframes are important.
+                    const frameContent = await frame.content();
+                    framesHtml += `\n<!-- FRAME: ${frame.url()} -->\n<div class="frame-content" style="border:5px solid red; margin:10px;">${frameContent}</div>`;
+                } catch (e) { }
             }
-        } catch (e: any) {
-            await logger.log(`Validation check skipped/failed: ${e.message}`, 'warning');
-        }
 
-        await logger.log('Job Completed Successfully', 'success');
+            rawContent += framesHtml;
+            const cleanedHtml = cleanHtml(rawContent);
+
+
+            // ==========================================
+            // 🧠 CACHE / REPLAY LOGIC
+            // ==========================================
+            let actions: Action[] = [];
+            let fromCache = false;
+            let success = false;
+
+            // 1. Try Cache (ONLY ON FIRST STEP to avoid state mismatch on single-page wizards)
+            if (stepCount === 1) {
+                try {
+                    const cached = await TemplateModel.getByUrl(url);
+                    if (cached && cached.actions && cached.actions.length > 0) {
+                        await logger.log('⚡ Found cached instructions. Attempting to Replay...', 'success');
+                        actions = cached.actions;
+                        fromCache = true;
+
+                        try {
+                            await executeActions(page, actions, profileData, logger, controls);
+                            success = true;
+                            await logger.log('✅ Cache Replay Successful!', 'success');
+                        } catch (e: any) {
+                            await logger.log(`⚠️ Cache Replay Failed (${e.message}). Falling back to AI...`, 'warning');
+                            success = false;
+                            actions = [];
+                        }
+                    }
+                } catch (e) { console.error("Cache Check Error:", e); }
+            }
+
+            // 2. Fallback to AI
+            if (!success) {
+                await logger.log('🤖 Analyzing page with AI...', 'info');
+
+                // Allow some time for animations (common in wizards)
+                if (stepCount > 1) await page.waitForTimeout(1000);
+
+                actions = await getAiActionPlan(cleanedHtml, profileData);
+
+                if (actions.length === 0) {
+                    await logger.log("No actions found. Checking validation one last time...", "info");
+                } else {
+                    await logger.log(`Executing ${actions.length} actions`, 'info', { actions });
+
+                    // Execute returns true if any navigation/click occurred
+                    const executionResult = await executeActions(page, actions, profileData, logger, controls);
+                    console.log("DEBUG: executionResult =", executionResult); // Keep debug for now
+
+                    if (executionResult && executionResult.didNavigate) {
+                        lastActionWasNavigation = true;
+                    }
+
+                    // CRITICAL FIX: If actions failed, it implies hidden/obstructed fields or timing issues.
+                    // DO NOT consider this step "Complete" yet. Force another analysis loop.
+                    if (executionResult && executionResult.failedCount > 0) {
+                        await logger.log(`⚠️ ${executionResult.failedCount} actions failed. Forcing re-analysis...`, 'warning');
+                        success = false; // Force loop continuance
+                        actions = []; // Clear actions to prevent saving bad cache
+                    } else {
+                        success = true; // Loop success (actions found and executed cleanly)
+                    }
+
+                    // Save to Cache ONLY if success and step 1
+                    // caching wizards is complex, avoiding for now on step > 1
+                    if (success && stepCount === 1) {
+                        try {
+                            if (actions.length > 0) {
+                                await TemplateModel.upsert(url, actions);
+                                await logger.log('💾 Saved actions to cache.', 'success');
+                            }
+                        } catch (saveErr: any) { console.error("Cache Save Failed:", saveErr); }
+                    }
+                }
+            }
+            // --- VALIDATION & RECOVERY STEP ---
+            // OPTIMIZATION: Only validate if we found NO actions (potential exit). 
+            // If we found actions, we assume there's more work or next loop will catch it.
+            let recoveryCount = 0;
+            if (actions.length === 0) {
+                try {
+                    await logger.log("Validating form completeness...", "info");
+
+                    // USE THE SAME VISIBLE-ONLY EXTRACTION FOR VALIDATION
+                    // (Otherwise validation sees hidden wizard steps and thinks they are missing fields)
+                    const validationHtml = await page.evaluate(() => {
+                        function isVisible(el: Element): boolean {
+                            const style = window.getComputedStyle(el);
+                            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width === 0 && rect.height === 0 && style.overflow === 'hidden') return false;
+                            return true;
+                        }
+
+                        function cloneVisible(node: Node): Node | null {
+                            if (node.nodeType === Node.TEXT_NODE) return node.cloneNode(true);
+                            if (node.nodeType === Node.COMMENT_NODE) return null;
+                            if (node.nodeType === Node.ELEMENT_NODE) {
+                                const el = node as Element;
+                                if (!isVisible(el)) return null;
+
+                                const clone = el.cloneNode(false) as Element;
+                                // SYNC VALUES
+                                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                                    const val = (el as HTMLInputElement).value;
+                                    if (val) clone.setAttribute('value', val);
+                                }
+                                if (el.tagName === 'SELECT') {
+                                    const idx = (el as HTMLSelectElement).selectedIndex;
+                                    if (idx !== -1) {
+                                        const options = (el as HTMLSelectElement).options;
+                                        if (options[idx]) clone.setAttribute('data-selected-text', options[idx].text);
+                                    }
+                                }
+
+                                for (const child of Array.from(el.childNodes)) {
+                                    const childClone = cloneVisible(child);
+                                    if (childClone) clone.appendChild(childClone);
+                                }
+                                return clone;
+                            }
+                            return null;
+                        }
+
+                        const visibleBody = cloneVisible(document.body);
+                        return visibleBody ? (visibleBody as Element).outerHTML : "";
+                    });
+
+                    const validationPrompt = `
+                    You are a QA Agent.
+                    HTML:
+                    \`\`\`html
+                    ${validationHtml}
+                    \`\`\`
+                    TASK: Identify missing fields that MUST be filled. Return JSON { "missing_fields": [{ "label": "...", "selector": "...", "type": "..." }] }.
+                `;
+                    const valCompletion = await completionWithFallback({
+                        messages: [{ role: "user", content: validationPrompt }],
+                        response_format: { type: "json_object" },
+                        max_tokens: 1000
+                    });
+                    const valContent = valCompletion.choices[0].message.content || "{}";
+                    const valData = JSON.parse(valContent);
+                    const missingFields = valData.missing_fields || [];
+
+                    if (Array.isArray(missingFields) && missingFields.length > 0) {
+                        await logger.log(`Found ${missingFields.length} unfilled fields. Asking user...`, 'warning');
+                        const recoveryActions: Action[] = missingFields.map((field: any) => ({
+                            selector: field.selector,
+                            value: field.label || "Value needed",
+                            type: 'ask_user' as const
+                        }));
+                        await executeActions(page, recoveryActions, profileData, logger, controls);
+                        recoveryCount = recoveryActions.length;
+
+                        // If we recovered, we should probably re-eval (continue loop)
+                    } else {
+                        if (actions.length > 0) {
+                            await logger.log("Validation passed for this step.", "info");
+                        }
+                    }
+                } catch (e: any) { await logger.log(`Validation skipped: ${e.message}`, 'warning'); }
+            }
+
+            // EXIT CONDITION
+            if (actions.length === 0 && recoveryCount === 0) {
+                await logger.log('🎉 Job Completed (No more actions detected).', 'success');
+                jobCompleted = true;
+                break;
+            }
+
+            // Wait for navigation if a button was clicked
+            await page.waitForTimeout(1000);
+            await page.waitForLoadState('networkidle').catch(() => { });
+        }
 
     } catch (err: any) {
         console.error("Automation Error:", err);

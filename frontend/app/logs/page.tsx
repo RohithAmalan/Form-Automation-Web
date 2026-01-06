@@ -13,7 +13,7 @@ export default function SystemLogsPage() {
     const [viewMode, setViewMode] = useState<'timeline' | 'table'>('timeline');
 
     const fetchLogs = () => {
-        fetch(`${SERVER_URL}/logs`, { credentials: 'include' })
+        fetch(`${SERVER_URL}/logs`)
             .then((res) => res.json())
             .then((data) => {
                 if (Array.isArray(data)) {

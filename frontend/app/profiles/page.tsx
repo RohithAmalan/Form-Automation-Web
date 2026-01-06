@@ -24,7 +24,7 @@ export default function ProfilesPage() {
 
     const fetchProfiles = useCallback(() => {
         setLoading(true);
-        fetch(`${SERVER_URL}/profiles`, { credentials: 'include' })
+        fetch(`${SERVER_URL}/profiles`)
             .then(res => res.json())
             .then(data => {
                 setProfiles(data);
@@ -64,7 +64,7 @@ export default function ProfilesPage() {
     const handleDelete = async (id: string) => {
         if (!confirm("Are you sure you want to delete this profile?")) return;
         try {
-            await fetch(`${SERVER_URL}/profiles/${id}`, { method: 'DELETE', credentials: 'include' });
+            await fetch(`${SERVER_URL}/profiles/${id}`, { method: 'DELETE' });
             fetchProfiles();
         } catch {
             alert("Failed to delete");
@@ -84,7 +84,7 @@ export default function ProfilesPage() {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: formName, payload: parsed }),
-                credentials: 'include'
+
             });
 
             if (res.ok) {

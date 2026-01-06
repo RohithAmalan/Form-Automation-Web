@@ -153,6 +153,32 @@ export const FormController = {
         }
     },
 
+    cancelJob: async (req: Request, res: Response) => {
+        console.log(`[API] Cancel Request for Job ${req.params.id}`);
+        try {
+            // If PROCESSING/PAUSED/WAITING => CANCELLING
+            // If already COMPLETED/FAILED/DEAD => No-op but return success?
+            // Actually, we should force update to CANCELLED unless it's done.
+
+            const result = await pool.query(
+                "UPDATE jobs SET status = 'CANCELLED' WHERE id = $1 AND status NOT IN ('COMPLETED', 'FAILED', 'DEAD', 'CANCELLED')",
+                [req.params.id]
+            );
+
+            // If rowCount is 0, it means it was already in a final state.
+            if (result.rowCount === 0) {
+                const check = await pool.query("SELECT status FROM jobs WHERE id = $1", [req.params.id]);
+                if (check.rows.length === 0) return res.status(404).json({ error: "Job not found" });
+                return res.json({ message: `Job was already ${check.rows[0].status}` });
+            }
+
+            res.json({ message: "Job Cancelled" });
+        } catch (err: any) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+
     resumeJob: async (req: Request, res: Response): Promise<any> => {
 
 
@@ -256,6 +282,44 @@ export const FormController = {
             if (file) {
                 updates.file_path = file.path;
             }
+
+            // --- PROFILE AUTO-UPDATE LOGIC ---
+            // 1. Fetch Job to get Profile ID
+            const job = await JobModel.getById(req.params.id);
+
+            // 2. If valid data & profile exists, merge and save
+            if (job && job.profile_id && Object.keys(incomingData).length > 0) {
+                try {
+                    const profile = await ProfileModel.getById(job.profile_id);
+                    if (profile) {
+                        // Merge Logic: existing payload + new data
+                        const newPayload = { ...profile.payload, ...incomingData };
+
+                        // We need the name to update. Since getById only returns payload (checked model), 
+                        // we might need to fetch name or just keep it? 
+                        // Model check: getById returns "result.rows[0]". 
+                        // Query was: SELECT payload FROM profiles WHERE id = $1. 
+                        // Oops, I need the NAME too to call update(id, name, payload).
+
+                        // Let's quickly fix getById usage or re-query.
+                        // Actually, let's just do a direct UPDATE on payload only? 
+                        // ProfileModel.update requires name.
+                        // Let's trust ProfileModel.getById returns everything? 
+                        // Wait, step 636 showed: SELECT payload FROM profiles...
+                        // So I can't get the name.
+                        // I should fix ProfileModel.getById to return * first? 
+                        // OR just Use a raw query here to update ONLY payload?
+                        // Raw query is safer/faster here than changing Model contract mid-flight.
+
+                        await pool.query('UPDATE profiles SET payload = $1 WHERE id = $2', [newPayload, job.profile_id]);
+                        console.log(`[API] Auto-updated Profile ${job.profile_id} with new data:`, incomingData);
+                    }
+                } catch (e) {
+                    console.error("[API] Failed to auto-update profile:", e);
+                    // Don't block the resume!
+                }
+            }
+            // --------------------------------
 
             await JobModel.update(req.params.id, updates);
 

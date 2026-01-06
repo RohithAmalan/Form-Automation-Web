@@ -10,6 +10,7 @@ import templateRoutes from './routes/template.routes';
 import { JobModel } from './models/job.model';
 import { LogModel } from './models/log.model';
 import { runWorker } from './queue/taskQueue';
+import { globalErrorHandler } from './middleware/errorHandler';
 import pool from './config/db';
 
 const app = express();
@@ -43,6 +44,10 @@ app.use(express.json());
 app.use('/auth', authRoutes); // Auth Routes
 app.use('/templates', templateRoutes); // Templates mounted at /templates prefix
 app.use('/', formRoutes);
+
+// Global Error Handler (Must be last)
+// Global Error Handler (Must be last)
+app.use(globalErrorHandler);
 
 
 app.get('/health', (req, res) => {

@@ -117,6 +117,12 @@ export const runWorker = async () => {
                 const res = await pool.query("SELECT status FROM jobs WHERE id = $1", [job.id]);
                 const status = res.rows[0]?.status;
 
+                // 1. Immediate Kill Check
+                if (status === 'CANCELLED' || status === 'CANCELLING' || status === 'DEAD') {
+                    throw new Error(`Job stopped by user (Status: ${status})`);
+                }
+
+                // 2. Pause Logic
                 if (status === 'PAUSED') {
                     await logger.log("⏸️ Job manually PAUSED. Waiting for Continue...", "warning");
                     while (true) {
@@ -127,7 +133,7 @@ export const runWorker = async () => {
                             await logger.log("▶️ Job Manually Resumed!", "success");
                             break;
                         }
-                        if (cur === 'FAILED' || cur === 'COMPLETED' || cur === 'DEAD' || cur === 'CANCELLED') throw new Error(`Job stopped (Status: ${cur})`);
+                        if (cur === 'FAILED' || cur === 'COMPLETED' || cur === 'DEAD' || cur === 'CANCELLED' || cur === 'CANCELLING') throw new Error(`Job stopped (Status: ${cur})`);
                     }
                 }
             };
@@ -135,11 +141,27 @@ export const runWorker = async () => {
             const askUser = async (type: 'file' | 'text', label: string): Promise<string | null> => {
                 console.log(`⏸️ Job ${job.id} WAITING FOR INPUT (${type}): ${label}`);
 
+                // 0. Pre-Check: Don't enter wait state if already dead/cancelled
+                const preCheck = await pool.query("SELECT status FROM jobs WHERE id = $1", [job.id]);
+                if (['FAILED', 'DEAD', 'CANCELLED', 'CANCELLING', 'COMPLETED'].includes(preCheck.rows[0]?.status)) {
+                    return null;
+                }
+
                 // 1. Set Info in Custom Data
                 const jRes = await pool.query("SELECT custom_data FROM jobs WHERE id = $1", [job.id]);
                 const cData = jRes.rows[0]?.custom_data || {};
                 const nData = { ...cData, _missing_type: type, _missing_label: label };
-                await pool.query("UPDATE jobs SET custom_data = $1, status = 'WAITING_INPUT' WHERE id = $2", [nData, job.id]);
+
+                // Use Conditional Update to avoid overwriting a Cancel that happened milliseconds ago
+                const updateRes = await pool.query(
+                    "UPDATE jobs SET custom_data = $1, status = 'WAITING_INPUT' WHERE id = $2 AND status NOT IN ('CANCELLED', 'CANCELLING', 'DEAD', 'FAILED', 'COMPLETED')",
+                    [nData, job.id]
+                );
+
+                if (updateRes.rowCount === 0) {
+                    // Update failed, meaning status changed concurrently?
+                    return null;
+                }
 
                 // 2. Wait Loop
                 const POLL = 3000;
@@ -195,7 +217,21 @@ export const runWorker = async () => {
                 await pool.query(`UPDATE jobs SET status = 'COMPLETED', completed_at = NOW() WHERE id = $1`, [job.id]);
                 console.log(`✅ Job ${job.id} Completed`);
             } catch (err: any) {
-                const MAX_RETRIES = 1;
+                // Check if it was cancelled
+                const check = await pool.query("SELECT status FROM jobs WHERE id = $1", [job.id]);
+                const curStatus = check.rows[0]?.status;
+
+                if (curStatus === 'CANCELLED' || err.message.includes('Job stopped by user')) {
+                    console.log(`🛑 Job ${job.id} Cancelled confirmed.`);
+                    await LogModel.create(job.id, 'warning', `Job Cancelled by User`, {});
+                    // Ensure it stays Cancelled (already set by API, but safety)
+                    if (curStatus !== 'CANCELLED') {
+                        await pool.query(`UPDATE jobs SET status = 'CANCELLED', completed_at = NOW() WHERE id = $1`, [job.id]);
+                    }
+                    return; // EXIT WORKER LOOP for this job
+                }
+
+                const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '1', 10);
                 const currentRetries = (job as any).retries || 0;
 
                 if (currentRetries < MAX_RETRIES) {

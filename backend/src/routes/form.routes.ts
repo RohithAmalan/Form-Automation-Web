@@ -31,30 +31,35 @@ const upload = multer({ storage: storage });
 // --- Routes ---
 
 // Profiles (Authenticated Users)
-router.get('/profiles', ensureAuthenticated, FormController.getProfiles);
-router.post('/profiles', ensureAuthenticated, FormController.createProfile);
-router.put('/profiles/:id', ensureAuthenticated, FormController.updateProfile);
-router.delete('/profiles/:id', ensureAuthenticated, FormController.deleteProfile);
+// Profiles (Public)
+router.get('/profiles', FormController.getProfiles);
+router.post('/profiles', FormController.createProfile);
+router.put('/profiles/:id', FormController.updateProfile);
+router.delete('/profiles/:id', FormController.deleteProfile);
 
 // Jobs (Queue Functions -> Admin Only)
-router.get('/jobs', ensureAuthenticated, FormController.getJobs); // View is allowed for Auth users
-router.post('/jobs', ensureAdmin, upload.array('files', 10), FormController.createJob); // Create is Admin
-router.delete('/jobs/:id', ensureAdmin, FormController.deleteJob);
-router.delete('/jobs', ensureAdmin, FormController.deleteAllJobs);
-router.post('/jobs/:id/pause', ensureAdmin, FormController.pauseJob);
-router.post('/jobs/:id/continue', ensureAdmin, FormController.continueJob);
-router.post('/jobs/:id/resume', ensureAdmin, upload.single('file'), FormController.resumeJob);
+// Jobs (Public)
+router.get('/jobs', FormController.getJobs); // View is allowed for Auth users
+router.post('/jobs', upload.array('files', 10), FormController.createJob); // Create is Public
+router.delete('/jobs/:id', FormController.deleteJob);
+router.delete('/jobs', FormController.deleteAllJobs);
+router.post('/jobs/:id/pause', FormController.pauseJob);
+router.post('/jobs/:id/continue', FormController.continueJob);
+router.post('/jobs/:id/resume', upload.single('file'), FormController.resumeJob);
+router.post('/jobs/:id/cancel', FormController.cancelJob);
 
 // Logs - Moved to top
 console.log("Registering /logs route (TOP)");
-router.get('/logs', ensureAuthenticated, (req, res) => {
+router.get('/logs', (req, res) => {
     console.log("Hit /logs (Inline)");
     FormController.getSystemLogs(req, res);
 });
 
 // Logs
 // router.get('/logs', ...); // MOVED
-router.get('/jobs/:id/logs', ensureAuthenticated, FormController.getJobLogs);
+// Logs
+// router.get('/logs', ...); // MOVED
+router.get('/jobs/:id/logs', FormController.getJobLogs);
 
 // Settings
 router.get('/settings/health', FormController.getSystemHealth);

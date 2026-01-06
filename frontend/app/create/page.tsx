@@ -45,7 +45,7 @@ export default function CreateJobPage() {
 
     // Fetch Profiles & Templates
     const fetchTemplates = () => {
-        fetch(`${SERVER_URL}/templates`, { credentials: 'include' })
+        fetch(`${SERVER_URL}/templates`)
             .then((res) => res.json())
             .then((data) => {
                 setTemplates(data);
@@ -55,7 +55,7 @@ export default function CreateJobPage() {
 
     useEffect(() => {
         // Profiles
-        fetch(`${SERVER_URL}/profiles`, { credentials: 'include' })
+        fetch(`${SERVER_URL}/profiles`)
             .then((res) => res.json())
             .then((data) => {
                 setProfiles(data);
@@ -99,8 +99,7 @@ export default function CreateJobPage() {
             const res = await fetch(`${SERVER_URL}/templates/${id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: editName }),
-                credentials: 'include'
+                body: JSON.stringify({ name: editName })
             });
             if (res.ok) {
                 setEditingId(null);
@@ -118,7 +117,7 @@ export default function CreateJobPage() {
         try {
             const res = await fetch(`${SERVER_URL}/templates/${id}`, {
                 method: 'DELETE',
-                credentials: 'include'
+
             });
             if (res.ok) {
                 fetchTemplates(); // Refresh list
@@ -158,8 +157,7 @@ export default function CreateJobPage() {
 
             const res = await fetch(`${SERVER_URL}/jobs`, {
                 method: "POST",
-                body: formData,
-                credentials: 'include'
+                body: formData
             });
 
             const data = await res.json();

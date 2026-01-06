@@ -26,30 +26,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
 
     useEffect(() => {
-        // Exclude Public Routes
-        // Exclude Public Routes
-        if (pathname === '/login') {
-            // We are on login page, so we don't need to check auth, but we need to stop loading.
-            // Using setTimeout to avoid "setState during render" warning if this effect runs immediately.
-            setTimeout(() => setLoading(false), 0);
-            return;
-        }
-
-        fetch("http://localhost:3001/auth/me", { credentials: 'include' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.authenticated) {
-                    setUser(data.user);
-                } else {
-                    router.push('/login');
-                }
-                setLoading(false);
-            })
-            .catch(() => {
-                router.push('/login');
-                setLoading(false);
-            });
-    }, [pathname, router]);
+        // ALWAYS LOGGED IN (Mock)
+        setUser({
+            id: 'mock-user-1',
+            display_name: 'Guest User',
+            email: 'guest@example.com',
+            photo_url: ''
+        });
+        setLoading(false);
+    }, []);
 
     const logout = async () => {
         await fetch("http://localhost:3001/auth/logout", { method: "POST", credentials: 'include' });

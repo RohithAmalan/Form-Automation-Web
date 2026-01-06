@@ -34,11 +34,18 @@ export default function DashboardPage() {
   const [resumeTextInput, setResumeTextInput] = useState("");
 
   const fetchJobs = () => {
-    fetch(`${SERVER_URL}/jobs`, { credentials: 'include' })
+    fetch(`${SERVER_URL}/jobs`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) {
           setJobs(data);
+          // AUTO-OPEN RESUME MODAL if a job is waiting (and not already showing)
+          const waitingJob = data.find(j => j.status === 'WAITING_INPUT');
+          if (waitingJob && !showResumeModal && !resumeJobId) {
+            console.log("Auto-opening resume modal for:", waitingJob.id);
+            setResumeJobId(waitingJob.id);
+            setShowResumeModal(true);
+          }
         } else {
           console.error("Jobs fetch error:", data);
           setJobs([]);
@@ -57,7 +64,7 @@ export default function DashboardPage() {
   const deleteJob = async (jobId: string) => {
     if (!confirm("Delete this job record?")) return;
     try {
-      const res = await fetch(`${SERVER_URL}/jobs/${jobId}`, { method: 'DELETE', credentials: 'include' });
+      const res = await fetch(`${SERVER_URL}/jobs/${jobId}`, { method: 'DELETE' });
       if (res.ok) {
         setJobs(prev => prev.filter(j => j.id !== jobId));
         fetchJobs();
@@ -70,7 +77,7 @@ export default function DashboardPage() {
 
   const pauseJob = async (jobId: string) => {
     try {
-      await fetch(`${SERVER_URL}/jobs/${jobId}/pause`, { method: 'POST', credentials: 'include' });
+      await fetch(`${SERVER_URL}/jobs/${jobId}/pause`, { method: 'POST' });
       fetchJobs();
     } catch (err) {
       console.error(err);
@@ -79,7 +86,17 @@ export default function DashboardPage() {
 
   const continueJob = async (jobId: string) => {
     try {
-      await fetch(`${SERVER_URL}/jobs/${jobId}/continue`, { method: 'POST', credentials: 'include' });
+      await fetch(`${SERVER_URL}/jobs/${jobId}/continue`, { method: 'POST' });
+      fetchJobs();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const cancelJob = async (jobId: string) => {
+    if (!confirm("Are you sure you want to stop this job?")) return;
+    try {
+      await fetch(`${SERVER_URL}/jobs/${jobId}/cancel`, { method: 'POST' });
       fetchJobs();
     } catch (err) {
       console.error(err);
@@ -91,7 +108,7 @@ export default function DashboardPage() {
     setLogs([]);
     setViewMode('timeline');
     try {
-      const res = await fetch(`${SERVER_URL}/jobs/${jobId}/logs`, { credentials: 'include' });
+      const res = await fetch(`${SERVER_URL}/jobs/${jobId}/logs`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setLogs(data);
@@ -125,7 +142,7 @@ export default function DashboardPage() {
     }
 
     try {
-      const res = await fetch(`${SERVER_URL}/jobs/${resumeJobId}/resume`, { method: 'POST', body: formData, credentials: 'include' });
+      const res = await fetch(`${SERVER_URL}/jobs/${resumeJobId}/resume`, { method: 'POST', body: formData });
       if (res.ok) {
         setShowResumeModal(false);
         setResumeFile(null);
@@ -297,8 +314,9 @@ export default function DashboardPage() {
                       <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border
                                         ${job.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.1)]' :
                           job.status === 'FAILED' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                            job.status === 'WAITING_INPUT' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse' :
-                              'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
+                            job.status === 'CANCELLED' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' :
+                              job.status === 'WAITING_INPUT' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse' :
+                                'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
                         {job.status === 'WAITING_INPUT' ? (
                           <span className="flex items-center gap-1.5">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -347,6 +365,13 @@ export default function DashboardPage() {
 
                         {job.status === 'WAITING_INPUT' && (
                           <button onClick={() => openResumeModal(job.id)} className="px-3 py-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-yellow-500/30">Resume</button>
+                        )}
+                        {/* STOP BUTTON */}
+                        {['PROCESSING', 'PAUSED', 'WAITING_INPUT'].includes(job.status) && (
+                          <button onClick={() => cancelJob(job.id)} className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-red-500/20 flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            Stop
+                          </button>
                         )}
                         <button onClick={() => deleteJob(job.id)} className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>

@@ -25,6 +25,11 @@ export const JobModel = {
         return result.rows;
     },
 
+    getById: async (id: string) => {
+        const result = await pool.query('SELECT * FROM jobs WHERE id = $1', [id]);
+        return result.rows[0];
+    },
+
     create: async (url: string, profile_id: string, custom_data: any, file_path: string | null, form_name: string) => {
         const result = await pool.query(
             'INSERT INTO jobs (url, profile_id, custom_data, file_path, form_name) VALUES ($1, $2, $3, $4, $5) RETURNING *',

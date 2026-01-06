@@ -17,7 +17,7 @@ export default function SettingsPage() {
 
     const checkHealth = useCallback(() => {
         setLoading(true);
-        fetch(`${SERVER_URL}/settings/health`, { credentials: 'include' })
+        fetch(`${SERVER_URL}/settings/health`)
             .then(res => res.json())
             .then(data => {
                 setHealth(data);
@@ -43,7 +43,7 @@ export default function SettingsPage() {
         if (userInput !== 'DELETE') return;
 
         try {
-            const res = await fetch(`${SERVER_URL}/jobs`, { method: 'DELETE', credentials: 'include' });
+            const res = await fetch(`${SERVER_URL}/jobs`, { method: 'DELETE' });
             if (res.ok) {
                 alert("All data verified cleared.");
                 window.location.reload();

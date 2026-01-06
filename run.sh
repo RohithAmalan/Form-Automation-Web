@@ -19,6 +19,9 @@ trap cleanup EXIT INT TERM
 # Get absolute path to this script's directory
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Create logs directory
+mkdir -p "$DIR/logs"
+
 # 1. Start Server
 echo -e "${CYAN}📦 Starting Backend Server (Port 3001)...${NC}"
 cd "$DIR/backend"
