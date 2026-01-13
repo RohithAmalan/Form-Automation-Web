@@ -170,8 +170,8 @@ function ConfigurationForm() {
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [showAI, setShowAI] = useState(false);
-    const [showQueue, setShowQueue] = useState(true); // Default open
-    const [showReliability, setShowReliability] = useState(true); // Default open
+    const [showQueue, setShowQueue] = useState(true);
+    const [showReliability, setShowReliability] = useState(true);
 
     useEffect(() => {
         fetch(`${SERVER_URL}/settings`)
@@ -180,8 +180,14 @@ function ConfigurationForm() {
             .finally(() => setLoading(false));
     }, []);
 
-    const handleChange = (key: string, val: any) => {
-        setSettings({ ...settings, [key]: val });
+    const handleChange = (section: 'queue' | 'form' | 'config', key: string, val: any) => {
+        setSettings((prev: any) => ({
+            ...prev,
+            [section]: {
+                ...prev[section],
+                [key]: val
+            }
+        }));
     };
 
     const handleSave = async () => {
@@ -199,10 +205,13 @@ function ConfigurationForm() {
     if (loading) return <div className="text-gray-400">Loading settings...</div>;
     if (!settings) return <div className="text-red-400">Failed to load settings.</div>;
 
+    // Safety checks for new structure vs old
+    const queue = settings.queue || {};
+    const form = settings.form || {};
+    const config = settings.config || {};
+
     return (
         <div className="space-y-8">
-
-
 
             {/* 1. Queue Configuration (Collapsible) */}
             <div className="border border-white/10 rounded-xl overflow-hidden">
@@ -220,13 +229,12 @@ function ConfigurationForm() {
                 {showQueue && (
                     <div className="p-6 bg-black/20 animate-in slide-in-from-top-2">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {/* Poll Interval */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Poll Interval (seconds)</label>
                                 <input
                                     type="number"
-                                    value={(settings.pollInterval || 2000) / 1000}
-                                    onChange={(e) => handleChange('pollInterval', Number(e.target.value) * 1000)}
+                                    value={(queue.pollInterval || 2000) / 1000}
+                                    onChange={(e) => handleChange('queue', 'pollInterval', Number(e.target.value) * 1000)}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white"
                                     step={0.1}
                                     min={0.5}
@@ -234,31 +242,27 @@ function ConfigurationForm() {
                                 <p className="text-xs text-gray-500 mt-2">Worker loop frequency.</p>
                             </div>
 
-                            {/* New Job Priority */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">New Job Priority</label>
                                 <select
-                                    value={settings.defaultPriority ?? 0}
-                                    onChange={(e) => handleChange('defaultPriority', Number(e.target.value))}
+                                    value={queue.defaultPriority ?? 0}
+                                    onChange={(e) => handleChange('queue', 'defaultPriority', Number(e.target.value))}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white appearance-none"
                                 >
                                     <option value={0}>Normal (Recommended)</option>
                                     <option value={-1}>Urgent (Top Priority)</option>
                                 </select>
                                 <p className="text-xs text-gray-500 mt-2">
-                                    {settings.defaultPriority === -1
-                                        ? "New jobs jump to the front."
-                                        : "New jobs go to the back."}
+                                    {queue.defaultPriority === -1 ? "New jobs jump to the front." : "New jobs go to the back."}
                                 </p>
                             </div>
 
-                            {/* Toggles */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col justify-center gap-3">
                                 <label className="flex items-center gap-3 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={settings.runtimePriorityOverride ?? true}
-                                        onChange={(e) => handleChange('runtimePriorityOverride', e.target.checked)}
+                                        checked={queue.runtimePriorityOverride ?? true}
+                                        onChange={(e) => handleChange('queue', 'runtimePriorityOverride', e.target.checked)}
                                         className="w-4 h-4 rounded border-gray-600 text-blue-500 focus:ring-blue-500 bg-gray-700"
                                     />
                                     <span className="text-sm text-gray-300">Allow Runtime Override</span>
@@ -266,8 +270,8 @@ function ConfigurationForm() {
                                 <label className="flex items-center gap-3 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={settings.retryEscalation ?? false}
-                                        onChange={(e) => handleChange('retryEscalation', e.target.checked)}
+                                        checked={queue.retryEscalation ?? false}
+                                        onChange={(e) => handleChange('queue', 'retryEscalation', e.target.checked)}
                                         className="w-4 h-4 rounded border-gray-600 text-blue-500 focus:ring-blue-500 bg-gray-700"
                                     />
                                     <span className="text-sm text-gray-300">Escalate on Retry</span>
@@ -275,8 +279,8 @@ function ConfigurationForm() {
                                 <label className="flex items-center gap-3 cursor-pointer">
                                     <input
                                         type="checkbox"
-                                        checked={settings.exclusivePriority ?? false}
-                                        onChange={(e) => handleChange('exclusivePriority', e.target.checked)}
+                                        checked={queue.exclusivePriority ?? false}
+                                        onChange={(e) => handleChange('queue', 'exclusivePriority', e.target.checked)}
                                         className="w-4 h-4 rounded border-gray-600 text-blue-500 focus:ring-blue-500 bg-gray-700"
                                     />
                                     <span className="text-sm text-gray-300">Exclusive Priority (Single Urgent Job)</span>
@@ -287,7 +291,7 @@ function ConfigurationForm() {
                 )}
             </div>
 
-            {/* 2. Task Reliability & Timeouts (Collapsible) */}
+            {/* 2. Task Reliability & Timeouts */}
             <div className="border border-white/10 rounded-xl overflow-hidden">
                 <button
                     onClick={() => setShowReliability(!showReliability)}
@@ -303,47 +307,43 @@ function ConfigurationForm() {
                 {showReliability && (
                     <div className="p-6 bg-black/20 animate-in slide-in-from-top-2">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {/* Max Retries */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Max Retries</label>
                                 <input
                                     type="number"
-                                    value={settings.maxRetries}
-                                    onChange={(e) => handleChange('maxRetries', Number(e.target.value))}
+                                    value={queue.maxRetries}
+                                    onChange={(e) => handleChange('queue', 'maxRetries', Number(e.target.value))}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white"
                                 />
                                 <p className="text-xs text-gray-500 mt-2">Attempts before failing a job.</p>
                             </div>
-                            {/* Backoff */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Retry Backoff (seconds)</label>
                                 <input
                                     type="number"
-                                    value={(settings.retryBackoffMs || 2000) / 1000}
-                                    onChange={(e) => handleChange('retryBackoffMs', Number(e.target.value) * 1000)}
+                                    value={(queue.retryBackoffMs || 2000) / 1000}
+                                    onChange={(e) => handleChange('queue', 'retryBackoffMs', Number(e.target.value) * 1000)}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white"
                                     step={0.5}
                                 />
                                 <p className="text-xs text-gray-500 mt-2">Wait time between retries.</p>
                             </div>
-                            {/* Page Load */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Page Load (seconds)</label>
                                 <input
                                     type="number"
-                                    value={(settings.pageLoadTimeoutMs || 60000) / 1000}
-                                    onChange={(e) => handleChange('pageLoadTimeoutMs', Number(e.target.value) * 1000)}
+                                    value={(form.pageLoadTimeoutMs || 60000) / 1000}
+                                    onChange={(e) => handleChange('form', 'pageLoadTimeoutMs', Number(e.target.value) * 1000)}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white"
                                 />
                                 <p className="text-xs text-gray-500 mt-2">Wait time for website to open.</p>
                             </div>
-                            {/* Element Wait */}
                             <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Element Wait (seconds)</label>
                                 <input
                                     type="number"
-                                    value={(settings.elementWaitTimeoutMs || 10000) / 1000}
-                                    onChange={(e) => handleChange('elementWaitTimeoutMs', Number(e.target.value) * 1000)}
+                                    value={(form.elementWaitTimeoutMs || 10000) / 1000}
+                                    onChange={(e) => handleChange('form', 'elementWaitTimeoutMs', Number(e.target.value) * 1000)}
                                     className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white"
                                 />
                                 <p className="text-xs text-gray-500 mt-2">Wait time for buttons/inputs.</p>
@@ -353,7 +353,7 @@ function ConfigurationForm() {
                 )}
             </div>
 
-            {/* 4. AI Configuration (Collapsible) */}
+            {/* 3. AI Configuration */}
             <div className="border border-white/10 rounded-xl overflow-hidden">
                 <button
                     onClick={() => setShowAI(!showAI)}
@@ -373,19 +373,19 @@ function ConfigurationForm() {
                             <input
                                 type="password"
                                 placeholder="sk-or-..."
-                                value={settings.openaiApiKey || ""}
-                                onChange={(e) => handleChange('openaiApiKey', e.target.value)}
+                                value={config.openaiApiKey || ""}
+                                onChange={(e) => handleChange('config', 'openaiApiKey', e.target.value)}
                                 className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-white font-mono text-sm"
                             />
-                            <p className="text-xs text-gray-500 mt-1">Leave blank to keep existing key. Enter new key to update.</p>
+                            <p className="text-xs text-gray-500 mt-1">Leave blank to keep existing.</p>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Primary Model</label>
                                 <input
                                     type="text"
-                                    value={settings.primaryModel || "openai/gpt-4o-mini"}
-                                    onChange={(e) => handleChange('primaryModel', e.target.value)}
+                                    value={config.primaryModel || "openai/gpt-4o-mini"}
+                                    onChange={(e) => handleChange('config', 'primaryModel', e.target.value)}
                                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>
@@ -393,8 +393,8 @@ function ConfigurationForm() {
                                 <label className="block text-xs font-bold text-gray-400 mb-2 uppercase">Fallback Model</label>
                                 <input
                                     type="text"
-                                    value={settings.fallbackModel || "google/gemini-flash-1.5"}
-                                    onChange={(e) => handleChange('fallbackModel', e.target.value)}
+                                    value={config.fallbackModel || "google/gemini-flash-1.5"}
+                                    onChange={(e) => handleChange('config', 'fallbackModel', e.target.value)}
                                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-white font-mono text-sm"
                                 />
                             </div>

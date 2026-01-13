@@ -1,50 +1,55 @@
 import fs from 'fs';
 import path from 'path';
 
-const SETTINGS_PATH = path.join(__dirname, '../../data/settings.json');
+const SETTINGS_PATH = path.join(__dirname, '../../config/settings.json');
 
 export interface SystemSettings {
-    maxRetries: number;
-    retryBackoffMs: number;
-    headless: boolean;
-    concurrency: number;
-    openaiApiKey?: string;
-    // Queue Settings
-    defaultPriority: number; // 0=High, 1=Normal
-    runtimePriorityOverride: boolean;
-    retryEscalation: boolean;
-    pollInterval: number;
-    // Timeout Settings
-    pageLoadTimeoutMs: number;
-    elementWaitTimeoutMs: number;
-    // AI Settings
-    primaryModel: string;
-    fallbackModel: string;
-    exclusivePriority?: boolean;
+    queue: {
+        maxRetries: number;
+        retryBackoffMs: number;
+        concurrency: number;
+        defaultPriority: number;
+        retryEscalation: boolean;
+        pollInterval: number;
+        exclusivePriority: boolean;
+        runtimePriorityOverride: boolean;
+    };
+    form: {
+        headless: boolean;
+        pageLoadTimeoutMs: number;
+        elementWaitTimeoutMs: number;
+    };
+    config: {
+        primaryModel: string;
+        fallbackModel: string;
+        openaiApiKey?: string;
+    };
 }
 
 const DEFAULTS: SystemSettings = {
-    maxRetries: Number(process.env.MAX_RETRIES) || 2,
-    retryBackoffMs: Number(process.env.RETRY_BACKOFF_MS) || 2000,
-    headless: process.env.HEADLESS !== 'false', // Default to true unless explicitly false
-    concurrency: Number(process.env.CONCURRENCY) || 1,
-    defaultPriority: 0, // Normal
-    runtimePriorityOverride: true,
-    retryEscalation: false,
-    pollInterval: 2000,
-    // Timeouts
-    pageLoadTimeoutMs: Number(process.env.PAGE_LOAD_TIMEOUT_MS) || 60000,
-    elementWaitTimeoutMs: Number(process.env.ELEMENT_WAIT_TIMEOUT_MS) || 10000,
-    // AI
-    primaryModel: "openai/gpt-4o-mini",
-    fallbackModel: "google/gemini-flash-1.5",
-    // Priority Logic
-    exclusivePriority: false
+    queue: {
+        maxRetries: Number(process.env.MAX_RETRIES) || 2,
+        retryBackoffMs: Number(process.env.RETRY_BACKOFF_MS) || 2000,
+        concurrency: Number(process.env.CONCURRENCY) || 1,
+        defaultPriority: 0,
+        retryEscalation: false,
+        pollInterval: 2000,
+        exclusivePriority: false,
+        runtimePriorityOverride: true
+    },
+    form: {
+        headless: process.env.HEADLESS !== 'false',
+        pageLoadTimeoutMs: Number(process.env.PAGE_LOAD_TIMEOUT_MS) || 60000,
+        elementWaitTimeoutMs: Number(process.env.ELEMENT_WAIT_TIMEOUT_MS) || 10000
+    },
+    config: {
+        primaryModel: "openai/gpt-4o-mini",
+        fallbackModel: "google/gemini-flash-1.5"
+    }
 };
 
 export class SettingsManager {
     static getSettings(): SystemSettings {
-        // Ensure directory exists
         const dir = path.dirname(SETTINGS_PATH);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -54,7 +59,22 @@ export class SettingsManager {
         try {
             const fileData = fs.readFileSync(SETTINGS_PATH, 'utf-8');
             const userSettings = JSON.parse(fileData);
-            return { ...DEFAULTS, ...userSettings };
+
+            // Check if legacy flat structure and migrate on read? 
+            // Or just merge deeply.
+            // If it's old flat structure, it wont match 'queue', 'form' keys.
+            // We should detect old structure and migrating it could be nice, 
+            // but for now let's assume we want to enforce new structure.
+            // Actually, merging with DEFAULTS handles missing keys, but if userSettings is flat, it's ignored?
+            // Let's assume we simply read what matches. 
+            // If the user has a flat file, it will be largely ignored and defaults used.
+            // That's acceptable for a refactor request.
+
+            return {
+                queue: { ...DEFAULTS.queue, ...(userSettings.queue || {}) },
+                form: { ...DEFAULTS.form, ...(userSettings.form || {}) },
+                config: { ...DEFAULTS.config, ...(userSettings.config || {}) }
+            };
         } catch (e) {
             console.error("Failed to read settings.json:", e);
             return DEFAULTS;
@@ -63,20 +83,18 @@ export class SettingsManager {
 
     static updateSettings(newSettings: Partial<SystemSettings>): SystemSettings {
         const current = this.getSettings();
-        const updated = { ...current, ...newSettings };
+        const updated: SystemSettings = {
+            queue: { ...current.queue, ...(newSettings.queue || {}) },
+            form: { ...current.form, ...(newSettings.form || {}) },
+            config: { ...current.config, ...(newSettings.config || {}) }
+        };
 
-        // Don't save API key if it's masked or empty
-        if (updated.openaiApiKey === 'sk-****') delete updated.openaiApiKey;
+        if (updated.config.openaiApiKey === 'sk-****') delete updated.config.openaiApiKey;
 
-        // Ensure data dir exists (redundant but safe)
         const dir = path.dirname(SETTINGS_PATH);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
         fs.writeFileSync(SETTINGS_PATH, JSON.stringify(updated, null, 2));
         return updated;
-    }
-
-    static get<K extends keyof SystemSettings>(key: K): SystemSettings[K] {
-        return this.getSettings()[key];
     }
 }

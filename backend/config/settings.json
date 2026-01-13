@@ -1,0 +1,21 @@
+{
+  "queue": {
+    "maxRetries": 2,
+    "retryBackoffMs": 2000,
+    "concurrency": 1,
+    "defaultPriority": 0,
+    "retryEscalation": false,
+    "pollInterval": 2000,
+    "exclusivePriority": false,
+    "runtimePriorityOverride": true
+  },
+  "form": {
+    "headless": false,
+    "pageLoadTimeoutMs": 60000,
+    "elementWaitTimeoutMs": 10000
+  },
+  "config": {
+    "primaryModel": "openai/gpt-4o-mini",
+    "fallbackModel": "google/gemini-flash-1.5"
+  }
+}

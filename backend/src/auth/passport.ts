@@ -27,6 +27,7 @@ passport.deserializeUser(async (id: string, done) => {
 });
 
 // --- GOOGLE STRATEGY ---
+// --- GOOGLE STRATEGY ---
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
@@ -43,13 +44,17 @@ passport.use(new GoogleStrategy({
             const name = profile.displayName || "Unknown";
 
             await pool.query(
-                "INSERT INTO users (id, email, display_name, photo_url) VALUES ($1, $2, $3, $4)",
-                [profile.id, email, name, photo]
+                "INSERT INTO users (id, email, display_name, photo_url, refresh_token) VALUES ($1, $2, $3, $4, $5)",
+                [profile.id, email, name, photo, refreshToken || null]
             );
-            return done(null, { id: profile.id, email, display_name: name, photo_url: photo });
+            return done(null, { id: profile.id, email, display_name: name, photo_url: photo, refresh_token: refreshToken });
         } else {
-            // Update last login
-            await pool.query("UPDATE users SET last_login = NOW() WHERE id = $1", [profile.id]);
+            // Update last login & Refresh Token (if provided)
+            if (refreshToken) {
+                await pool.query("UPDATE users SET last_login = NOW(), refresh_token = $1 WHERE id = $2", [refreshToken, profile.id]);
+            } else {
+                await pool.query("UPDATE users SET last_login = NOW() WHERE id = $1", [profile.id]);
+            }
             return done(null, res.rows[0]);
         }
     } catch (e) {

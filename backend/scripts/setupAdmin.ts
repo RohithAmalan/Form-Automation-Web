@@ -24,8 +24,8 @@ const runMigration = async () => {
         console.log("✅ Column 'role' added (or already exists).");
 
         // 3. Create/Update Admin User
-        const email = 'admin@local';
-        const password = 'admin123';
+        const email = process.env.ADMIN_EMAIL || 'admin@local';
+        const password = process.env.ADMIN_PASSWORD || 'admin123';
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Check if admin exists

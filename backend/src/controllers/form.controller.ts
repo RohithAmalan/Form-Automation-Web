@@ -87,7 +87,7 @@ export const FormController = {
             const filePathToSave = filePaths.length > 0 ? JSON.stringify(filePaths) : null;
 
             const finalFormName = form_name || "Untitled Form";
-            const defaultPriority = SettingsManager.get('defaultPriority') ?? 0;
+            const defaultPriority = SettingsManager.getSettings().queue.defaultPriority ?? 0;
             const finalType = type || 'FORM_SUBMISSION';
 
             const job = await JobModel.create(url, profile_id, parsedCustomData, filePathToSave, finalFormName, defaultPriority, finalType);
@@ -404,7 +404,7 @@ export const FormController = {
             await JobModel.updatePriority(req.params.id, newPriority);
 
             // Exclusive Priority Logic
-            const exclusive = SettingsManager.get('exclusivePriority');
+            const exclusive = SettingsManager.getSettings().queue.exclusivePriority;
             if (exclusive && newPriority === -1) {
                 // If setting to Urgent and Exclusive Mode is ON, reset everyone else
                 await JobModel.resetPendingPriorities(req.params.id);

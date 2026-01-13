@@ -28,8 +28,8 @@ const openai = new OpenAI({
 
 // Helper to handle AI Completion with Fallback
 async function completionWithFallback(params: any) {
-    const PRIMARY_MODEL = SettingsManager.get('primaryModel') || "openai/gpt-4o-mini";
-    const FALLBACK_MODEL = SettingsManager.get('fallbackModel') || "google/gemini-flash-1.5";
+    const PRIMARY_MODEL = SettingsManager.getSettings().config.primaryModel || "openai/gpt-4o-mini";
+    const FALLBACK_MODEL = SettingsManager.getSettings().config.fallbackModel || "google/gemini-flash-1.5";
 
     // Re-check API Key from settings (if dynamic update supported) - though instance is static. 
     // Ideally we re-instantiate OpenAI if key changes, but for now we stick to env/static instance 
@@ -766,8 +766,8 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
         throw e; // Fail early
     }
 
-    const headless = SettingsManager.get('headless');
-    console.log(`[DEBUG] SettingsManager.get('headless') = ${headless} (Type: ${typeof headless})`);
+    const headless = SettingsManager.getSettings().form.headless;
+    console.log(`[DEBUG] SettingsManager.getSettings().form.headless = ${headless} (Type: ${typeof headless})`);
     await logger.log(`Launching Browser (Headless: ${headless})`, 'info');
     const browser = await chromium.launch({
         headless: headless,
@@ -785,8 +785,8 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
 
         const navRetries = parseInt(process.env.MAX_RETRIES || '2', 10);
         const navBackoff = parseInt(process.env.RETRY_BACKOFF_MS || '2000', 10);
-        const loadTimeout = SettingsManager.get('pageLoadTimeoutMs') || 60000;
-        const elementTimeout = SettingsManager.get('elementWaitTimeoutMs') || 10000;
+        const loadTimeout = SettingsManager.getSettings().form.pageLoadTimeoutMs || 60000;
+        const elementTimeout = SettingsManager.getSettings().form.elementWaitTimeoutMs || 10000;
 
         // Set Global Default Timeout for Elements
         page.setDefaultTimeout(elementTimeout);

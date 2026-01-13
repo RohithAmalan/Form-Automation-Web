@@ -111,4 +111,35 @@ If Google Login is not configured, you can use the local admin account:
 *   `database/`: SQL Schema & Migrations.
 
 ---
+
+## ⚙️ Configuration (`config/settings.json`)
+
+The system uses a nested `settings.json` file (managed via the **Settings Page**) to control runtime behavior dynamically.
+
+```json
+{
+  "queue": {
+    "pollInterval": 2000,          // (ms) How often worker checks for jobs
+    "concurrency": 1,              // Max jobs running at once
+    "maxRetries": 2,               // Max re-attempts before failure
+    "retryBackoffMs": 2000,        // (ms) Wait time between retries
+    "retryEscalation": false,      // If true, retried jobs become Priority -1
+    "exclusivePriority": false,    // If true, pauses all non-urgent jobs
+    "defaultPriority": 0           // 0=Normal, -1=Urgent
+  },
+  "form": {
+    "headless": false,             // Run browser in background (true/false)
+    "pageLoadTimeoutMs": 60000,    // (ms) Wait for page load
+    "elementWaitTimeoutMs": 10000  // (ms) Wait for element to appear
+  },
+  "config": {
+    "primaryModel": "openai/gpt-4... // Main AI Model
+    "fallbackModel": "google/gemini.. // Backup AI Model
+  }
+}
+```
+
+> **Note**: Sensitive Infrastructure keys (`DATABASE_URL`, `GOOGLE_CLIENT_SECRET`) are kept in `.env`, while runtime behavior is in `settings.json`.
+
+---
 *Built by Rohith Amalan*

@@ -6,8 +6,9 @@ export class SettingsController {
         try {
             const settings = SettingsManager.getSettings();
             // Mask API Key for security
-            if (settings.openaiApiKey) {
-                settings.openaiApiKey = 'sk-****' + settings.openaiApiKey.slice(-4);
+            // Mask API Key for security
+            if (settings.config.openaiApiKey) {
+                settings.config.openaiApiKey = 'sk-****' + settings.config.openaiApiKey.slice(-4);
             }
             res.json(settings);
         } catch (error) {
@@ -35,7 +36,8 @@ export class SettingsController {
         // Check BOTH Runtime Settings AND Environment Variables
         // The runtime settings manager might be empty if the user hasn't overridden anything,
         // but the app is still valid if .env has the key.
-        const hasKey = !!SettingsManager.get('openaiApiKey') || !!process.env.OPENROUTER_API_KEY || !!process.env.OPENAI_API_KEY;
+        const settings = SettingsManager.getSettings();
+        const hasKey = !!settings.config.openaiApiKey || !!process.env.OPENROUTER_API_KEY || !!process.env.OPENAI_API_KEY;
 
         res.json({
             db: 'connected', // Ideally check real DB connection

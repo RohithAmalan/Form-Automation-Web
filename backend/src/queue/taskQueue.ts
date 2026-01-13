@@ -97,7 +97,7 @@ export const runWorker = async () => {
     while (true) {
         try {
             // 1. Check Concurrency Limit
-            const maxConcurrency = SettingsManager.get('concurrency') || 1;
+            const maxConcurrency = SettingsManager.getSettings().queue.concurrency || 1;
             const freeSlots = maxConcurrency - activeJobs.size;
 
             // Debug Heartbeat (only if slots changed or every 5s?) - actually just log if we have capacity
@@ -124,11 +124,11 @@ export const runWorker = async () => {
                 // If active jobs exist, sleep short which effectively is waiting for race.
                 if (activeJobs.size > 0) {
                     // Wait for any job to finish OR timeout
-                    const interval = SettingsManager.get('pollInterval') || 2000;
+                    const interval = SettingsManager.getSettings().queue.pollInterval || 2000;
                     const timer = new Promise(resolve => setTimeout(resolve, interval));
                     await Promise.race([...activeJobs, timer]);
                 } else {
-                    const interval = SettingsManager.get('pollInterval') || 2000;
+                    const interval = SettingsManager.getSettings().queue.pollInterval || 2000;
                     await new Promise(resolve => setTimeout(resolve, interval));
                 }
                 continue;
@@ -276,7 +276,7 @@ export const runWorker = async () => {
                             return;
                         }
 
-                        const MAX_RETRIES = SettingsManager.get('maxRetries') || 1; // Use SettingsManager
+                        const MAX_RETRIES = SettingsManager.getSettings().queue.maxRetries || 1; // Use SettingsManager
                         const currentRetries = (job as any).retries || 0;
 
                         if (currentRetries < MAX_RETRIES) {
@@ -284,7 +284,7 @@ export const runWorker = async () => {
                             const params: any[] = [job.id];
 
                             // Retry Escalation
-                            if (SettingsManager.get('retryEscalation')) {
+                            if (SettingsManager.getSettings().queue.retryEscalation) {
                                 // Escalate priority (decrement by 1, min -1)
                                 query += ", priority = -1"; // Force to urgent/critical on retry? Or just decrement? 
                                 // Let's set to -1 (Critical) to retry ASAP as per requirement "Run Next" behavior usually implies speed.
@@ -293,7 +293,7 @@ export const runWorker = async () => {
 
                             query += " WHERE id = $1";
                             await pool.query(query, params);
-                            console.log(`⚠️ Job ${job.id} retrying... (Priority Escalated: ${SettingsManager.get('retryEscalation')})`);
+                            console.log(`⚠️ Job ${job.id} retrying... (Priority Escalated: ${SettingsManager.getSettings().queue.retryEscalation})`);
                         } else {
                             await pool.query(`UPDATE jobs SET status = 'DEAD', completed_at = NOW() WHERE id = $1`, [job.id]);
                             console.error(`❌ Job ${job.id} Dead:`, err);
