@@ -1,0 +1,10 @@
+{
+  "maxRetries": 2,
+  "retryBackoffMs": 2000,
+  "headless": false,
+  "concurrency": 1,
+  "defaultPriority": 0,
+  "runtimePriorityOverride": true,
+  "retryEscalation": false,
+  "pollInterval": 2000
+}

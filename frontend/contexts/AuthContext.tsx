@@ -26,15 +26,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
 
     useEffect(() => {
-        // ALWAYS LOGGED IN (Mock)
-        setUser({
-            id: 'mock-user-1',
-            display_name: 'Guest User',
-            email: 'guest@example.com',
-            photo_url: ''
-        });
-        setLoading(false);
-    }, []);
+        const checkUser = async () => {
+            try {
+                const res = await fetch("http://localhost:3001/auth/me", { credentials: "include" });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.authenticated && data.user) {
+                        setUser(data.user);
+                    }
+                } else if (pathname !== '/login') {
+                    // router.push('/login'); // Optional: enforce login
+                }
+            } catch (err) {
+                console.error("Auth check failed", err);
+            } finally {
+                setLoading(false);
+            }
+        };
+        checkUser();
+    }, [pathname]);
 
     const logout = async () => {
         await fetch("http://localhost:3001/auth/logout", { method: "POST", credentials: 'include' });

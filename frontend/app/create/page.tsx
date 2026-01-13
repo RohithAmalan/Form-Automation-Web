@@ -10,7 +10,6 @@ interface Profile {
     name: string;
 }
 
-
 interface Action {
     type: string;
     selector: string;
@@ -38,6 +37,7 @@ export default function CreateJobPage() {
     const [loading, setLoading] = useState(false);
     const [files, setFiles] = useState<File[]>([]);
     const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
+    const [bulkMode, setBulkMode] = useState(false);
 
     // Rename State
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -135,40 +135,63 @@ export default function CreateJobPage() {
         setLoading(true);
         setStatus("Submitting...");
 
-        try {
-            const formData = new FormData();
-            formData.append("url", url);
-            formData.append("form_name", formName || "Untitled Task");
-            formData.append("profile_id", selectedProfile);
+        const targets = bulkMode
+            ? url.split('\n').map(u => u.trim()).filter(u => u.length > 0)
+            : [url];
 
-            let parsedCustomData = {};
-            if (customData.trim()) {
-                try {
-                    parsedCustomData = JSON.parse(customData);
-                } catch {
-                    parsedCustomData = { "extra_info": customData };
+        if (targets.length === 0) {
+            setStatus("Error: No valid URLs found.");
+            setLoading(false);
+            return;
+        }
+
+        try {
+            let successCount = 0;
+            let lastId = "";
+
+            for (const targetUrl of targets) {
+                const formData = new FormData();
+                formData.append("url", targetUrl);
+                formData.append("form_name", formName || (bulkMode ? "Bulk Task" : "Untitled Task"));
+                formData.append("profile_id", selectedProfile);
+
+                let parsedCustomData = {};
+                if (customData.trim()) {
+                    try {
+                        parsedCustomData = JSON.parse(customData);
+                    } catch {
+                        parsedCustomData = { "extra_info": customData };
+                    }
+                }
+                formData.append("custom_data", JSON.stringify(parsedCustomData));
+
+                if (files.length > 0) {
+                    files.forEach(f => formData.append("files", f));
+                }
+
+                const res = await fetch(`${SERVER_URL}/jobs`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    successCount++;
+                    lastId = data.id;
+                } else {
+                    console.error(`Failed to submit ${targetUrl}:`, data.error);
                 }
             }
-            formData.append("custom_data", JSON.stringify(parsedCustomData));
 
-            if (files.length > 0) {
-                files.forEach(f => formData.append("files", f));
-            }
-
-            const res = await fetch(`${SERVER_URL}/jobs`, {
-                method: "POST",
-                body: formData
-            });
-
-            const data = await res.json();
-            if (res.ok) {
-                setStatus(`Success: Job Submitted! ID: ${data.id}`);
+            if (successCount > 0) {
+                setStatus(`Success: ${successCount} Job(s) Submitted! ${successCount === 1 ? `ID: ${lastId}` : ''}`);
                 setTimeout(() => {
                     router.push('/');
                 }, 1500);
             } else {
-                setStatus(`Error: ${data.error}`);
+                setStatus(`Error: Failed to submit any jobs.`);
             }
+
         } catch (err) {
             if (err instanceof Error) {
                 setStatus(`Error: Network Error: ${err.message}`);
@@ -208,16 +231,41 @@ export default function CreateJobPage() {
                                 />
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Target URL</label>
-                                <input
-                                    type="url"
-                                    value={url}
-                                    onChange={(e) => setUrl(e.target.value)}
-                                    placeholder="https://site.com/form..."
-                                    required
-                                    className="glass-input w-full px-4 py-3 rounded-xl text-sm placeholder-gray-600 focus:ring-2 focus:ring-blue-500/50 transition-all font-mono"
-                                />
+                            <div className={bulkMode ? "md:col-span-2" : ""}>
+                                <div className="flex justify-between items-center mb-2">
+                                    <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                        {bulkMode ? "Target URLs (One per line)" : "Target URL"}
+                                    </label>
+
+                                    {/* Inline Bulk Toggle */}
+                                    <div className="flex items-center gap-2 cursor-pointer group" onClick={() => setBulkMode(!bulkMode)}>
+                                        <span className={`text-[10px] font-bold uppercase transition-colors ${bulkMode ? 'text-blue-400' : 'text-gray-600 group-hover:text-gray-400'}`}>
+                                            Bulk Mode
+                                        </span>
+                                        <div className={`w-8 h-4 rounded-full p-0.5 transition-colors ${bulkMode ? 'bg-blue-500' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
+                                            <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${bulkMode ? 'translate-x-4' : 'translate-x-0'}`} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {bulkMode ? (
+                                    <textarea
+                                        value={url}
+                                        onChange={(e) => setUrl(e.target.value)}
+                                        placeholder={`https://site.com/form1\nhttps://site.com/form2\nhttps://site.com/form3`}
+                                        required
+                                        className="glass-input w-full px-4 py-3 rounded-xl text-sm placeholder-gray-600 focus:ring-2 focus:ring-blue-500/50 transition-all font-mono h-32"
+                                    />
+                                ) : (
+                                    <input
+                                        type="url"
+                                        value={url}
+                                        onChange={(e) => setUrl(e.target.value)}
+                                        placeholder="https://site.com/form..."
+                                        required
+                                        className="glass-input w-full px-4 py-3 rounded-xl text-sm placeholder-gray-600 focus:ring-2 focus:ring-blue-500/50 transition-all font-mono"
+                                    />
+                                )}
                             </div>
                         </div>
 
@@ -342,7 +390,7 @@ export default function CreateJobPage() {
                                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                                         </svg>
-                                        <span>Launch Automation</span>
+                                        <span>Launch {bulkMode ? `Automation (Bulk)` : 'Automation'}</span>
                                     </div>
                                 )}
                             </button>

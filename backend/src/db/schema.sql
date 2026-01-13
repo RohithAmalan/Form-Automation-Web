@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     retries INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     started_at TIMESTAMP WITH TIME ZONE,
-    completed_at TIMESTAMP WITH TIME ZONE
+    completed_at TIMESTAMP WITH TIME ZONE,
+    priority INTEGER DEFAULT 0
 );
 
 -- Logs Table

@@ -18,6 +18,7 @@ interface Job {
   completed_at?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   custom_data?: any;
+  priority?: number;
 }
 
 export default function DashboardPage() {
@@ -26,6 +27,7 @@ export default function DashboardPage() {
   const [showLogs, setShowLogs] = useState(false);
   const [viewMode, setViewMode] = useState<'timeline' | 'table'>('timeline');
   const [initialLoading, setInitialLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'queue' | 'history'>('queue');
 
   // Resume State
   const [resumeJobId, setResumeJobId] = useState("");
@@ -98,6 +100,19 @@ export default function DashboardPage() {
     try {
       await fetch(`${SERVER_URL}/jobs/${jobId}/cancel`, { method: 'POST' });
       fetchJobs();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const setPriority = async (jobId: string, priority: number) => {
+    try {
+      const res = await fetch(`${SERVER_URL}/jobs/${jobId}/priority`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priority })
+      });
+      if (res.ok) fetchJobs();
     } catch (err) {
       console.error(err);
     }
@@ -195,6 +210,28 @@ export default function DashboardPage() {
     return `${minutes}m ${seconds}s`;
   };
 
+  // Filter and Sort Jobs
+  const queueJobs = jobs.filter(j => ['PROCESSING', 'PENDING', 'WAITING_INPUT', 'PAUSED'].includes(j.status))
+    .sort((a, b) => {
+      // 1. Processing first
+      if (a.status === 'PROCESSING' && b.status !== 'PROCESSING') return -1;
+      if (b.status === 'PROCESSING' && a.status !== 'PROCESSING') return 1;
+      // 2. Waiting Input / Paused second
+      if (['WAITING_INPUT', 'PAUSED'].includes(a.status) && !['WAITING_INPUT', 'PAUSED'].includes(b.status)) return -1;
+      if (['WAITING_INPUT', 'PAUSED'].includes(b.status) && !['WAITING_INPUT', 'PAUSED'].includes(a.status)) return 1;
+      // 3. Priority (Ascending: -1 is higher than 0)
+      const pA = a.priority ?? 0;
+      const pB = b.priority ?? 0;
+      if (pA !== pB) return pA - pB;
+      // 4. Created At (Oldest first)
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+  const historyJobs = jobs.filter(j => ['COMPLETED', 'FAILED', 'CANCELLED', 'DEAD'].includes(j.status))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  const displayJobs = activeTab === 'queue' ? queueJobs : historyJobs;
+
   return (
     <div className="animate-in fade-in duration-500 text-white pb-20">
 
@@ -274,7 +311,20 @@ export default function DashboardPage() {
       {/* Recent Activity Table */}
       <div className="glass-panel rounded-2xl overflow-hidden shadow-lg border border-white/5">
         <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-          <h2 className="font-bold text-lg text-white">Recent Activity</h2>
+          <div className="flex gap-4">
+            <button
+              onClick={() => setActiveTab('queue')}
+              className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${activeTab === 'queue' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+            >
+              Active Queue ({queueJobs.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${activeTab === 'history' ? 'bg-slate-700 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+            >
+              History ({historyJobs.length})
+            </button>
+          </div>
           <button onClick={fetchJobs} className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1 font-medium px-3 py-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
             Refresh
@@ -305,10 +355,10 @@ export default function DashboardPage() {
                     <td className="px-6 py-4"><div className="h-4 bg-slate-800 rounded w-16 ml-auto"></div></td>
                   </tr>
                 ))
-              ) : jobs.length === 0 ? (
-                <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500">No activity yet.</td></tr>
+              ) : displayJobs.length === 0 ? (
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">No jobs in this view.</td></tr>
               ) : (
-                jobs.map(job => (
+                displayJobs.map(job => (
                   <tr key={job.id} className="hover:bg-white/[0.03] transition-colors group">
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border
@@ -366,6 +416,24 @@ export default function DashboardPage() {
                         {job.status === 'WAITING_INPUT' && (
                           <button onClick={() => openResumeModal(job.id)} className="px-3 py-1 bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-yellow-500/30">Resume</button>
                         )}
+
+                        {/* PRIORITY TOGGLE */}
+                        {job.status === 'PENDING' && (
+                          <button
+                            onClick={() => setPriority(job.id, job.priority === -1 ? 0 : -1)}
+                            className={`px-3 py-1 rounded text-[10px] font-bold transition-all uppercase tracking-wide border flex items-center gap-1
+                              ${job.priority === -1
+                                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30 hover:bg-purple-500/30'
+                                : 'bg-slate-700/50 text-slate-400 border-slate-600 hover:bg-slate-600 hover:text-white'
+                              }`}
+                          >
+                            <svg className={`w-3 h-3 ${job.priority === -1 ? 'fill-current' : 'fill-none stroke-current'}`} viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                            {job.priority === -1 ? 'Urgent' : 'Prioritize'}
+                          </button>
+                        )}
+
                         {/* STOP BUTTON */}
                         {['PROCESSING', 'PAUSED', 'WAITING_INPUT'].includes(job.status) && (
                           <button onClick={() => cancelJob(job.id)} className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-[10px] font-bold transition-all uppercase tracking-wide border border-red-500/20 flex items-center gap-1">

@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import * as cheerio from 'cheerio';
 import { withRetry } from '../utils/resilience';
+import { SettingsManager } from '../utils/settingsManager';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
@@ -23,19 +24,27 @@ const openai = new OpenAI({
     }
 });
 
-const PRIMARY_MODEL = "openai/gpt-4o-mini";
-const FALLBACK_MODEL = "google/gemini-flash-1.5"; // Free tier model on OpenRouter
+// Models are now dynamic via SettingsManager
 
 // Helper to handle AI Completion with Fallback
 async function completionWithFallback(params: any) {
+    const PRIMARY_MODEL = SettingsManager.get('primaryModel') || "openai/gpt-4o-mini";
+    const FALLBACK_MODEL = SettingsManager.get('fallbackModel') || "google/gemini-flash-1.5";
+
+    // Re-check API Key from settings (if dynamic update supported) - though instance is static. 
+    // Ideally we re-instantiate OpenAI if key changes, but for now we stick to env/static instance 
+    // OR we pass apiKey per request if library supported it easily. 
+    // To support dynamic key, we'd need to recreate 'openai' client or use a factory.
+    // For this scope, we focus on Model ID which IS dynamic per call.
+
     try {
         console.log(`[AI] Requesting completion with ${PRIMARY_MODEL}...`);
-        return await openai.chat.completions.create({ ...params, model: PRIMARY_MODEL });
+        return await openai.chat.completions.create({ ...params, model: PRIMARY_MODEL }, { timeout: 60000 });
     } catch (e: any) {
         // Check for Credit Limit (402) or other likely "refusal" errors
         if (e.status === 402 || (e.message && e.message.toLowerCase().includes('credits'))) {
             console.warn(`⚠️ Primary Model Failed (Credits). Switching to Fallback: ${FALLBACK_MODEL}`);
-            return await openai.chat.completions.create({ ...params, model: FALLBACK_MODEL });
+            return await openai.chat.completions.create({ ...params, model: FALLBACK_MODEL }, { timeout: 60000 });
         }
         throw e;
     }
@@ -342,29 +351,56 @@ async function executeActions(
         await controls.checkPause();
         // --------------------------
 
-        const { selector, value, type } = action;
+        let { selector, value, type } = action;
+
+        // SANITIZER: Fix invalid AI selectors like button[text='Submit']
+        if (selector && selector.includes('[text=')) {
+            const oldSel = selector;
+            selector = selector.replace(/\[text=(['"])(.*?)\1\]/g, ':has-text("$2")');
+            if (oldSel !== selector) {
+                await logger.log(`Sanitized selector: ${oldSel} -> ${selector}`, 'info');
+            }
+        }
 
         try {
-            // Find which frame has this selector
-            let targetFrame: any = null;
-            // Check main frame first
-            if (await page.$(selector).catch(() => null)) {
-                targetFrame = page;
-            } else {
-                // Check other frames
+            // HELPER: Try to find frame with the selector, including case-insensitive fallback
+            const findFrame = async (sel: string): Promise<Frame | Page | null> => {
+                // 1. Try Strict
+                if (await page.$(sel).catch(() => null)) return page;
                 for (const frame of page.frames()) {
-                    if (await frame.$(selector).catch(() => null)) {
-                        targetFrame = frame;
-                        break;
+                    if (await frame.$(sel).catch(() => null)) return frame;
+                }
+
+                // 2. Try Case-Insensitive for Attributes (e.g. [name='Name'] vs [name='name'])
+                // Convert [key='value'] to [key='value' i]
+                if (sel.includes('[') && sel.includes('=\'') && !sel.includes(' i]')) {
+                    const insenSel = sel.replace(/=\s*'([^']+)'\]/g, "='$1' i]");
+                    if (insenSel !== sel) {
+                        if (await page.$(insenSel).catch(() => null)) {
+                            // Update the main selector variable for subsequent use
+                            selector = insenSel;
+                            await logger.log(`Matched selector case-insensitively: ${sel} -> ${selector}`, 'info');
+                            return page;
+                        }
+                        for (const frame of page.frames()) {
+                            if (await frame.$(insenSel).catch(() => null)) {
+                                selector = insenSel;
+                                await logger.log(`Matched selector case-insensitively (in frame): ${sel} -> ${selector}`, 'info');
+                                return frame;
+                            }
+                        }
                     }
                 }
-            }
+                return null;
+            };
+
+            let targetFrame = await findFrame(selector);
 
             // If not found, skip
             if (!targetFrame) {
                 // One retry for dynamic content?
                 await page.waitForTimeout(1000);
-                if (await page.$(selector).catch(() => null)) targetFrame = page;
+                targetFrame = await findFrame(selector);
             }
 
             if (!targetFrame) {
@@ -438,7 +474,19 @@ async function executeActions(
 
                         // Select the CORRECT option
                         await logger.log(`Selecting option "${bestMatch.text}" (val: ${bestMatch.value})`, 'action');
-                        await targetFrame.selectOption(selector, { value: bestMatch.value });
+                        try {
+                            await targetFrame.selectOption(selector, { value: bestMatch.value });
+                        } catch (selectErr: any) {
+                            await logger.log(`Standard select failed (${selectErr.message}). Forcing via JS...`, 'warning');
+                            await targetFrame.evaluate((args: any) => {
+                                const sel = document.querySelector(args.selector) as HTMLSelectElement;
+                                if (sel) {
+                                    sel.value = args.value;
+                                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                            }, { selector, value: bestMatch.value });
+                        }
                     } else {
                         // Fallback
                         await logger.log(`Option match failed. Trying direct selectOption by label: "${value}"`, 'warning');
@@ -456,8 +504,8 @@ async function executeActions(
                     await targetFrame.locator(selector).blur();
 
                     // Debug Final State
-                    const finalValue = await targetFrame.evalOnSelector(selector, (el: HTMLSelectElement) => el.value);
-                    await logger.log(`Final Dropdown State: ${finalValue}`, 'info');
+                    await (targetFrame as any).evalOnSelector(selector, (el: HTMLSelectElement) => el.value).catch(() => { });
+                    // await logger.log(`Final Dropdown State: ${finalValue}`, 'info');
 
                 } else {
                     // Prevent "undefined" string
@@ -502,7 +550,7 @@ async function executeActions(
                             }
                         } else {
                             // Only ask user if we genuinely don't have data
-                            if (!profileData[labelEncoded] && !profileData[labelText]) { // Check both labelEncoded and original labelText
+                            if (!profileData[labelEncoded] && (labelText && !profileData[labelText])) { // KEY FIX: Check labelText exists
                                 const userResponse = await controls.askUser('text', `Missing value for ${labelEncoded} (${selector})`);
                                 if (userResponse) {
                                     if (profileData.profile_id) {
@@ -718,8 +766,18 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
         throw e; // Fail early
     }
 
-    const browser = await chromium.launch({ headless: false }); // Visible for demo
-    const context = await browser.newContext();
+    const headless = SettingsManager.get('headless');
+    console.log(`[DEBUG] SettingsManager.get('headless') = ${headless} (Type: ${typeof headless})`);
+    await logger.log(`Launching Browser (Headless: ${headless})`, 'info');
+    const browser = await chromium.launch({
+        headless: headless,
+        devtools: false, // Explicitly disable devtools
+        args: headless ? ['--headless=new'] : [] // Explicitly force new headless mode if true
+    });
+    const context = await browser.newContext({
+        viewport: { width: 1920, height: 1080 }, // Force Desktop validation
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
     const page = await context.newPage();
 
     try {
@@ -727,8 +785,8 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
 
         const navRetries = parseInt(process.env.MAX_RETRIES || '2', 10);
         const navBackoff = parseInt(process.env.RETRY_BACKOFF_MS || '2000', 10);
-        const loadTimeout = parseInt(process.env.PAGE_LOAD_TIMEOUT_MS || '60000', 10);
-        const elementTimeout = parseInt(process.env.ELEMENT_WAIT_TIMEOUT_MS || '10000', 10);
+        const loadTimeout = SettingsManager.get('pageLoadTimeoutMs') || 60000;
+        const elementTimeout = SettingsManager.get('elementWaitTimeoutMs') || 10000;
 
         // Set Global Default Timeout for Elements
         page.setDefaultTimeout(elementTimeout);
@@ -756,6 +814,15 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
             if (lastActionWasNavigation) {
                 await page.waitForTimeout(2000);
                 lastActionWasNavigation = false; // Reset
+            }
+
+            // --- SUCCESS DETECTION ---
+            const pageText = await page.innerText('body');
+            const successKeywords = ['thanks for submitting', 'successfully submitted', 'thank you', 'your response has been recorded'];
+            if (successKeywords.some(kw => pageText.toLowerCase().includes(kw))) {
+                await logger.log('🎉 Detected Success Message. Job Complete.', 'success');
+                jobCompleted = true;
+                break;
             }
 
             // --- VISIBLE-ONLY CONTENT EXTRACTION ---
@@ -950,15 +1017,43 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
 
                                 const clone = el.cloneNode(false) as Element;
                                 // SYNC VALUES
-                                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                                    const val = (el as HTMLInputElement).value;
-                                    if (val) clone.setAttribute('value', val);
+                                // SYNC VALUES - CRITICAL FIX FOR AI "FALSE EMPTY" HALLUCINATIONS
+                                if (el.tagName === 'INPUT') {
+                                    const input = el as HTMLInputElement;
+                                    const type = input.type.toLowerCase();
+
+                                    // Checkboxes / Radios
+                                    if (type === 'checkbox' || type === 'radio') {
+                                        if (input.checked) {
+                                            clone.setAttribute('checked', 'true');
+                                            // Also add a visual indicator for AI
+                                            clone.setAttribute('data-checked-state', '[CHECKED]');
+                                        }
+                                    }
+                                    // Text / Email / Date / Etc
+                                    else {
+                                        const val = input.value;
+                                        if (val) {
+                                            clone.setAttribute('value', val);
+                                            // Explicitly add value to text content for AI visibility if needed
+                                            // but value attribute is usually enough for GPT-4o-mini
+                                        }
+                                    }
                                 }
-                                if (el.tagName === 'SELECT') {
+                                else if (el.tagName === 'TEXTAREA') {
+                                    const val = (el as HTMLTextAreaElement).value;
+                                    if (val) {
+                                        clone.textContent = val; // Textarea content is inside tags
+                                    }
+                                }
+                                else if (el.tagName === 'SELECT') {
                                     const idx = (el as HTMLSelectElement).selectedIndex;
                                     if (idx !== -1) {
                                         const options = (el as HTMLSelectElement).options;
-                                        if (options[idx]) clone.setAttribute('data-selected-text', options[idx].text);
+                                        if (options[idx]) {
+                                            clone.setAttribute('data-selected-text', options[idx].text);
+                                            clone.setAttribute('value', options[idx].value); // Sync value too
+                                        }
                                     }
                                 }
 
@@ -1028,7 +1123,10 @@ export async function processJob({ url, profileData, logger, checkPause, askUser
         await logger.log(`Job Failed: ${err.message}`, 'error');
         throw err;
     } finally {
-        // await browser.close(); 
-        console.log("Browser left open for debugging.");
+        // Close browser unless specifically debugging
+        // For now, always close to ensure "Hidden" mode works and process exits
+        try {
+            await browser.close();
+        } catch (e) { /* ignore already closed */ }
     }
 }

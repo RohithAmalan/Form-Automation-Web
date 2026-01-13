@@ -40,9 +40,12 @@ app.use(cors({
 app.use(express.json());
 
 
+import settingsRoutes from './routes/settings.routes';
+
 // Mount Routes
 app.use('/auth', authRoutes); // Auth Routes
 app.use('/templates', templateRoutes); // Templates mounted at /templates prefix
+app.use('/settings', settingsRoutes); // NEW: Settings Routes
 app.use('/', formRoutes);
 
 // Global Error Handler (Must be last)

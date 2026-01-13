@@ -47,6 +47,7 @@ router.post('/jobs/:id/pause', FormController.pauseJob);
 router.post('/jobs/:id/continue', FormController.continueJob);
 router.post('/jobs/:id/resume', upload.single('file'), FormController.resumeJob);
 router.post('/jobs/:id/cancel', FormController.cancelJob);
+router.patch('/jobs/:id/priority', FormController.updatePriority);
 
 // Logs - Moved to top
 console.log("Registering /logs route (TOP)");

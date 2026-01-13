@@ -17,7 +17,26 @@ router.get('/google/callback',
     }
 );
 
-// 3. User Info (for Frontend)
+// 3. Admin Login
+router.post('/login', (req, res, next) => {
+    passport.authenticate('local', (err: any, user: any, info: any) => {
+        if (err) {
+            console.error("Authentication Error:", err);
+            return res.status(500).json({ error: 'Authentication Error', details: err.message, stack: err.stack });
+        }
+        if (!user) return res.status(401).json({ error: info?.message || 'Login failed' });
+
+        req.logIn(user, (err) => {
+            if (err) {
+                console.error("Login Session Error:", err);
+                return res.status(500).json({ error: 'Session Error', details: err.message });
+            }
+            return res.json({ success: true, user });
+        });
+    })(req, res, next);
+});
+
+// 4. User Info (for Frontend)
 router.get('/me', (req, res) => {
     if (req.isAuthenticated()) {
         res.json({ authenticated: true, user: req.user });

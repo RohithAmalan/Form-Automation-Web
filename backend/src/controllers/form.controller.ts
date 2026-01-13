@@ -3,6 +3,7 @@ import { JobModel } from '../models/job.model';
 import { ProfileModel } from '../models/profile.model';
 import { LogModel } from '../models/log.model';
 import pool from '../config/db'; // Import pool for health check
+import { SettingsManager } from '../utils/settingsManager';
 
 export const FormController = {
     // --- Profiles ---
@@ -62,7 +63,7 @@ export const FormController = {
     createJob: async (req: Request, res: Response): Promise<any> => {
         try {
             const body = req.body || {};
-            const { url, profile_id, custom_data, form_name } = body;
+            const { url, profile_id, custom_data, form_name, type } = body;
             const files = req.files as Express.Multer.File[] || [];
 
             let parsedCustomData = {};
@@ -86,8 +87,10 @@ export const FormController = {
             const filePathToSave = filePaths.length > 0 ? JSON.stringify(filePaths) : null;
 
             const finalFormName = form_name || "Untitled Form";
+            const defaultPriority = SettingsManager.get('defaultPriority') ?? 0;
+            const finalType = type || 'FORM_SUBMISSION';
 
-            const job = await JobModel.create(url, profile_id, parsedCustomData, filePathToSave, finalFormName);
+            const job = await JobModel.create(url, profile_id, parsedCustomData, filePathToSave, finalFormName, defaultPriority, finalType);
             res.json(job);
         } catch (err: any) {
             console.error("Job Creation Error:", err);
@@ -381,6 +384,33 @@ export const FormController = {
         try {
             await JobModel.deleteAll();
             res.json({ message: 'All data cleared successfully.' });
+        } catch (err: any) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+
+    updatePriority: async (req: Request, res: Response) => {
+        const { priority } = req.body;
+        try {
+            const job = await JobModel.getById(req.params.id);
+            if (!job) return res.status(404).json({ error: "Job not found" });
+
+            if (job.status === 'PROCESSING') {
+                return res.status(400).json({ error: "Cannot change priority of a processing job." });
+            }
+
+            const newPriority = Number(priority);
+            await JobModel.updatePriority(req.params.id, newPriority);
+
+            // Exclusive Priority Logic
+            const exclusive = SettingsManager.get('exclusivePriority');
+            if (exclusive && newPriority === -1) {
+                // If setting to Urgent and Exclusive Mode is ON, reset everyone else
+                await JobModel.resetPendingPriorities(req.params.id);
+            }
+
+            res.json({ message: "Priority updated", priority: newPriority });
         } catch (err: any) {
             console.error(err);
             res.status(500).json({ error: err.message });

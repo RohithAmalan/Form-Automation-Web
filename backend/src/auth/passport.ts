@@ -1,6 +1,8 @@
 
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import { Strategy as LocalStrategy } from 'passport-local';
+import bcrypt from 'bcrypt';
 import pool from '../config/db';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "MISSING_ID";
@@ -24,6 +26,7 @@ passport.deserializeUser(async (id: string, done) => {
     }
 });
 
+// --- GOOGLE STRATEGY ---
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
@@ -51,6 +54,40 @@ passport.use(new GoogleStrategy({
         }
     } catch (e) {
         return done(e, undefined);
+    }
+}));
+
+// --- LOCAL STRATEGY (ADMIN) ---
+passport.use(new LocalStrategy({
+    usernameField: 'email',
+    passwordField: 'password'
+}, async (email, password, done) => {
+    try {
+        console.log(`🔐 Login Attempt: ${email}`);
+
+        const res = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (res.rows.length === 0) {
+            console.log("❌ User not found");
+            return done(null, false, { message: 'Incorrect email.' });
+        }
+
+        const user = res.rows[0];
+        if (!user.password_hash) {
+            console.log("❌ No password hash (Google User?)");
+            return done(null, false, { message: 'Please login with Google.' });
+        }
+
+        const match = await bcrypt.compare(password, user.password_hash);
+        if (!match) {
+            console.log("❌ Password mismatch");
+            return done(null, false, { message: 'Incorrect password.' });
+        }
+
+        console.log("✅ Login Success");
+        return done(null, user);
+    } catch (err) {
+        console.error("❌ Login Error:", err);
+        return done(err);
     }
 }));
 

@@ -26,7 +26,7 @@ export const globalErrorHandler = async (
     }
 
     // Try to retrieve Job ID from request if available (for precise logging)
-    const jobId = req.params.id || req.body.jobId;
+    const jobId = req.params?.id || req.body?.jobId;
     if (jobId) {
         try {
             await LogModel.create(
