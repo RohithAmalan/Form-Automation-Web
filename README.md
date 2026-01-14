@@ -47,38 +47,20 @@ A robust, AI-powered form automation agent featuring **Human-in-the-Loop (HITL)*
     cd Form_Automation_3
     ```
 
-2.  **Install Dependencies**:
+
+2.  **Run the Setup Script** (The Easy Way):
+    This command will install all dependencies (Frontend & Backend) and set up the database.
     ```bash
-    # Root & Backend
-    npm install
-    
-    # Frontend
-    cd frontend && npm install && cd ..
+    ./setup.sh
     ```
 
 3.  **Environment Variables**:
-    Create a `.env` file in the root directory:
+    The setup script created a `.env` file for you.
+    **Edit it now** with your real credentials:
     ```env
-    PORT=3001
-    DATABASE_URL=postgresql://postgres:password@localhost:5432/form_automation
-    OPENROUTER_API_KEY=sk-your-key
-    SESSION_SECRET=dev_secret
-    
-    # Google OAuth
-    GOOGLE_CLIENT_ID=your_id_here
-    GOOGLE_CLIENT_SECRET=your_secret_here
-    CALLBACK_URL=http://localhost:3001/auth/google/callback
-    ```
-
-4.  **Database Setup**:
-    Initialize the schema and create the default admin user:
-    ```bash
-    # 1. Create Tables
-    psql -d form_automation -f database/schema.sql
-    
-    # 2. Create Admin User & Session Table
-    npx ts-node backend/scripts/setupAdmin.ts
-    npx ts-node backend/scripts/initSessionTable.ts
+    # .env
+    DATABASE_URL=postgresql://...
+    OPENROUTER_API_KEY=sk-...
     ```
 
 ---
