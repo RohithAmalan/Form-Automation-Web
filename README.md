@@ -48,19 +48,19 @@ A robust, AI-powered form automation agent featuring **Human-in-the-Loop (HITL)*
     ```
 
 
+
 2.  **Run the Setup Script** (The Easy Way):
-    This command will install all dependencies (Frontend & Backend) and set up the database.
+    Run this command and **follow the prompts**. It will ask for your keys and set up everything for you.
     ```bash
     ./setup.sh
     ```
 
 3.  **Environment Variables**:
-    The setup script created a `.env` file for you.
-    **Edit it now** with your real credentials:
+    The script will generate a `.env` file based on your inputs. If you need to change anything later, you can edit this file manually.
     ```env
-    # .env
-    DATABASE_URL=postgresql://...
-    OPENROUTER_API_KEY=sk-...
+    # .env (Generated automatically)
+    DATABASE_URL=...
+    OPENROUTER_API_KEY=...
     ```
 
 ---
