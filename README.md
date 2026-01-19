@@ -39,45 +39,35 @@ A robust, AI-powered form automation agent featuring **Human-in-the-Loop (HITL)*
 
 ---
 
-## 📦 Setup & Installation
+## ⚡ Quick Start
 
-1.  **Clone the Repository**:
-    ```bash
-    git clone https://github.com/RohithAmalan/Form-Automation_3.git
-    cd Form_Automation_3
-    ```
+Get up and running in **2 minutes**.
 
+### 1. Clone & Setup
+```bash
+git clone https://github.com/RohithAmalan/Form-Automation-Web.git
+cd Form_Automation_3
 
+# Run the automated installer (Follow the prompts!)
+./setup.sh
+```
 
-2.  **Run the Setup Script** (The Easy Way):
-    Run this command and **follow the prompts**. It will ask for your keys and set up everything for you.
-    ```bash
-    ./setup.sh
-    ```
-
-3.  **Environment Variables**:
-    The script will generate a `.env` file based on your inputs. If you need to change anything later, you can edit this file manually.
-    ```env
-    # .env (Generated automatically)
-    DATABASE_URL=...
-    OPENROUTER_API_KEY=...
-    ```
-
----
-
-## 🏃‍♂️ Usage
-
-**Start the System** (Frontend + Backend):
+### 2. Start the App
 ```bash
 ./run.sh
 ```
-*   **Dashboard**: `http://localhost:3000`
-*   **API**: `http://localhost:3001`
 
-### 🔑 Admin Login
-If Google Login is not configured, you can use the local admin account:
+> **Dashboard**: `http://localhost:3000`  
+> **Backend**: `http://localhost:3001`
+
+---
+
+## 🔑 Default Credentials
+If you skip the prompt setup, you can login with:
 *   **Email**: `admin@local`
 *   **Password**: `admin123`
+
+
 
 ---
 
