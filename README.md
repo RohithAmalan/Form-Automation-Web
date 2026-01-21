@@ -70,6 +70,16 @@ If you skip the prompt setup, you can login with:
 *   **Email**: `admin@local`
 *   **Password**: `admin123`
 
+## 🤖 AI Configuration (Important!)
+To use the **automation features**, the system needs an **OpenRouter API Key**.
+
+1.  **During Setup**: The `./setup.sh` script will ask you for this key.
+2.  **Manual Update**: If you skipped it, open the `.env` file and add it manually:
+    ```bash
+    OPENROUTER_API_KEY=sk-or-v1-your-key-here...
+    ```
+    > **Note**: Without this key, the AI agent cannot analyze forms.
+
 
 
 ---
