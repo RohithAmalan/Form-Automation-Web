@@ -58,7 +58,7 @@ function cleanHtml(rawHtml: string): string {
     $('script').remove();
     $('style').remove();
     $('noscript').remove();
-    $('iframe').remove(); // We handle frames separately in Playwright, so nested iframes are likely ads
+    // $('iframe').remove(); // KEEP IFRAMES: They may contain valid form fields (e.g. widgets)
     $('svg').remove();
     $('meta').remove();
     $('link').remove();
@@ -245,20 +245,32 @@ async function getAiActionPlan(html: string, profileData: any): Promise<Action[]
             {"selector": "field_label", "value": "Question for user?", "type": "ask_user"}
          ]
        }
-    3. Use 'fill' to input text.
-    4. For dropdowns (<select>):
-       - Use 'fill' type.
-       - The 'value' MUST be the text of the option you want to select.
-    5. Use 'click' for buttons, checkboxes, AND RADIO BUTTONS.
-       - FOR BUTTONS ("Submit", "Next", "Continue"):
-         - PRIORITIZE using the text content selector format: "text=Next Step" or "text=Submit".
-         - Do NOT use generic classes like ".btn" or ".active" unless there is no text.
-         - Avoid ".active" class selectors as they often refer to state indicators, not the clickable button.
-    6. For file uploads (<input type="file">):
-       - Use type 'upload'.
-       - The 'value' should be the JSON stringified array of paths: '${fileListStr}'.
-       - If there are multiple file inputs, assign the appropriate file from the list if possible, or use all.
-    7. CRITICAL: Find the 'Submit' button and \`click\` it as the VERY LAST action.
+    3. SELECTOR STRATEGY (CRITICAL):
+       - **NEVER GUESS IDs**. Only use IDs if you see them explicitly in the HTML (e.g. id="input_4").
+       - If ID is obscure (e.g. id="u_12_b"), **USE ATTRIBUTES**:
+         - \`[name='phoneNumber']\`
+         - \`[aria-label='Phone Number']\`
+         - \`[placeholder='(555) 555-5555']\`
+       - If no good attributes, use **TEXT CONTENT** for buttons/labels:
+         - \`text=Submit\`
+         - \`label:has-text("Phone Number")\`
+       - **DO NOT** use generic selectors like \`#first_name\` or \`#email\` unless they exist in the HTML.
+       
+    4. DATA MAPPING:
+       - Look for fields matching keys in profileData.
+       - "Phone Number": Look for inputs with type="tel", name="phone", or label "Phone".
+       - "Address": Look for inputs for Street, City, Zip separately.
+    
+    5. MISSING DATA / HUMAN-IN-THE-LOOP:
+       - If you find a visible field but have NO matching data:
+         - Create type "ask_user".
+         - question_label: The visible label of the field.
+    
+    6. PROHIBITED:
+       - Do not return 'undefined' or 'null' values.
+    
+    7. SUBMIT:
+       - Always find the Submit button and click it last.
 
     8. SPECIAL INSTRUCTION FOR DATES:
        - The profile data includes keys: "current_date" (YYYY-MM-DD), "current_day", "current_year".
@@ -518,12 +530,41 @@ async function executeActions(
                         // But we can just execute the ask_user logic right here:
 
                         // Try to get a better label for the key
+                        // Try to get a better label for the key
                         const labelText = await targetFrame.evaluate((sel: string) => {
                             const el = document.querySelector(sel) as HTMLInputElement;
                             if (!el) return null;
+
+                            // 1. Standard HTML Label (Associated via 'for' or wrapping)
                             if (el.labels && el.labels.length > 0) return el.labels[0].innerText.trim();
+
+                            // 2. ARIA Label
                             if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+
+                            // 3. Placeholder
                             if (el.getAttribute('placeholder')) return el.getAttribute('placeholder');
+
+                            // 4. Name Attribute (Often more readable than ID)
+                            if (el.getAttribute('name')) {
+                                const name = el.getAttribute('name');
+                                // Clean up array notation often used in forms e.g. "client[name]" -> "client name"
+                                return name?.replace(/_/g, ' ').replace(/\[/g, ' ').replace(/\]/g, '').trim();
+                            }
+
+                            // 5. Heuristic: Look for closest container label
+                            // Many forms use: <div> <label>Name</label> <input> </div>
+                            const parent = el.closest('div, li, p, .form-group, .field-wrapper');
+                            if (parent) {
+                                const labelEl = parent.querySelector('label');
+                                if (labelEl) return labelEl.innerText.trim();
+
+                                // Fallback: sibling text?
+                                const previous = el.previousElementSibling;
+                                if (previous && (previous.tagName === 'LABEL' || previous.tagName === 'SPAN')) {
+                                    return previous.textContent?.trim() || null;
+                                }
+                            }
+
                             return null;
                         }, selector);
 

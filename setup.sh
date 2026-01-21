@@ -5,13 +5,15 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 echo -e "${GREEN}🚀 Starting Auto-Setup for Form Automation System...${NC}"
 
 # 1. Environment Setup (Interactive)
 if [ ! -f .env ]; then
-    echo -e "${YELLOW}⚠️  No .env file found. Let's configure it now.${NC}"
+    echo -e "${BLUE}⚠️  No .env file found. Let's configure it now.${NC}"
     
     echo -e "\n${BLUE}--- Database Config ---${NC}"
     read -p "Enter Database Password [default: password]: " DB_PASS
@@ -61,34 +63,57 @@ else
 fi
 
 # 2. Install Backend Dependencies
-echo -e "\n${BLUE}📦 Installing Backend Dependencies...${NC}"
+echo -e "\n${MAGENTA}📦 [Step 2/4] Installing Backend Dependencies...${NC}"
 cd backend
 npm install
 if [ $? -ne 0 ]; then echo -e "${RED}❌ Backend install failed.${NC}"; exit 1; fi
 cd ..
 
 # 3. Install Frontend Dependencies
-echo -e "\n${BLUE}📦 Installing Frontend Dependencies...${NC}"
+echo -e "\n${CYAN}💻 [Step 3/4] Installing Frontend Dependencies...${NC}"
 cd frontend
 npm install --legacy-peer-deps
 if [ $? -ne 0 ]; then echo -e "${RED}❌ Frontend install failed.${NC}"; exit 1; fi
 cd ..
 
 # 4. Database Setup prompt
-echo -e "\n${YELLOW}🗄️  Database Setup${NC}"
+echo -e "\n${YELLOW}🗄️  [Step 4/4] Database Setup${NC}"
 echo -e "Requires PostgreSQL running on localhost:5432."
 read -p "Do you want to initialize the database now? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # PRE-CHECK: Is Postgres actually running & accessible?
+    echo -e "${YELLOW}🔍 Checking Database Connection...${NC}"
+    
     if command -v psql &> /dev/null; then
-        psql -d form_automation -f database/schema.sql
-    else
-        echo -e "${YELLOW}⚠️ 'psql' not found. Ensure DB 'form_automation' exists.${NC}"
-    fi
+        # Check connection explicitly
+        if ! psql -U postgres -h localhost -c "\q" > /dev/null 2>&1; then
+             echo -e "${RED}❌ Error: Could not connect to PostgreSQL at localhost:5432.${NC}"
+             echo -e "${YELLOW}👉 Make sure the Postgres server is STARTED.${NC}"
+             echo -e "${YELLOW}👉 Make sure the password in .env matches your local DB password.${NC}"
+             echo -e "   (Try running 'psql -U postgres -h localhost' manually to debug)"
+             exit 1
+        fi
 
-    # Run Node scripts to seed data
-    npx ts-node backend/scripts/setupAdmin.ts
-    npx ts-node backend/scripts/initSessionTable.ts
+        # Check if database exists, create if not
+        psql -U postgres -h localhost -tc "SELECT 1 FROM pg_database WHERE datname = 'form_automation'" | grep -q 1 || psql -U postgres -h localhost -c "CREATE DATABASE form_automation"
+        
+        # Run Schema
+        psql -d form_automation -f database/schema.sql
+        
+        # Run Node scripts to seed data ONLY if DB is okay
+        echo -e "${MAGENTA}🌱 Seeding default data...${NC}"
+        npx ts-node backend/scripts/setupAdmin.ts
+        npx ts-node backend/scripts/initSessionTable.ts
+
+    else
+        echo -e "${RED}❌ 'psql' command not found.${NC}"
+        echo -e "${YELLOW}👉 You need to install PostgreSQL first:${NC}"
+        echo -e "   - Mac:   brew install postgresql"
+        echo -e "   - Win:   Download from postgresql.org"
+        echo -e "   - Linux: sudo apt install postgresql"
+        exit 1
+    fi
 fi
 
 echo -e "\n${GREEN}✅ Setup Complete!${NC}"

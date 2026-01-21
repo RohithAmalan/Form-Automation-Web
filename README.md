@@ -48,6 +48,9 @@ Get up and running in **2 minutes**.
 git clone https://github.com/RohithAmalan/Form-Automation-Web.git
 cd Form_Automation_3
 
+# First, make sure they are executable (run this once):
+chmod +x setup.sh run.sh
+
 # Run the automated installer (Follow the prompts!)
 ./setup.sh
 ```

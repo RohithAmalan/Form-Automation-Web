@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         setUser(data.user);
                     }
                 } else if (pathname !== '/login') {
-                    // router.push('/login'); // Optional: enforce login
+                    router.push('/login'); // Enforce login
                 }
             } catch (err) {
                 console.error("Auth check failed", err);
