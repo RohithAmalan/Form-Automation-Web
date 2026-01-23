@@ -15,10 +15,20 @@ echo -e "${GREEN}🚀 Starting Auto-Setup for Form Automation System...${NC}"
 if [ ! -f .env ]; then
     echo -e "${BLUE}⚠️  No .env file found. Let's configure it now.${NC}"
     
+    # --- CLOUD DEMO CONFIGURATION ---
+    # Paste your Neon/Supabase URL here to make it auto-connect for the mentor:
+    DEMO_DB_URL="" 
+    # --------------------------------
+
     echo -e "\n${BLUE}--- Database Config ---${NC}"
-    read -p "Enter Database Password [default: password]: " DB_PASS
-    DB_PASS=${DB_PASS:-password}
-    DB_URL="postgresql://postgres:${DB_PASS}@localhost:5432/form_automation"
+    if [ -n "$DEMO_DB_URL" ]; then
+         echo -e "${GREEN}✨ Using Embedded Cloud Database URL!${NC}"
+         DB_URL=$DEMO_DB_URL
+    else
+        read -p "Enter Database Password [default: password]: " DB_PASS
+        DB_PASS=${DB_PASS:-password}
+        DB_URL="postgresql://postgres:${DB_PASS}@localhost:5432/form_automation"
+    fi
 
     echo -e "\n${BLUE}--- AI Configuration ---${NC}"
     echo "You need an API Key from OpenRouter.ai (or OpenAI)."
@@ -108,12 +118,13 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 
     else
         echo -e "${RED}❌ 'psql' command not found.${NC}"
-        echo -e "${YELLOW}👉 You need to install PostgreSQL first:${NC}"
-        echo -e "   - Mac:   brew install postgresql"
-        echo -e "   - Win:   Download from postgresql.org"
-        echo -e "   - Linux: sudo apt install postgresql"
-        exit 1
+        echo -e "${YELLOW}⚠️  PostgreSQL is not installed or not in PATH.${NC}"
+        echo -e "${YELLOW}👉 If you are using a CLOUD DATABASE (Neon/Supabase), this is fine!${NC}"
+        echo -e "   Just manually update the DATABASE_URL in the .env file."
+        echo -e "   Skipping local database setup..."
+        # Do NOT exit 1 here, just continue
     fi
+fi
 fi
 
 echo -e "\n${GREEN}✅ Setup Complete!${NC}"
