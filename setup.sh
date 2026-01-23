@@ -17,7 +17,7 @@ if [ ! -f .env ]; then
     
     # --- CLOUD DEMO CONFIGURATION ---
     # Paste your Neon/Supabase URL here to make it auto-connect for the mentor:
-    DEMO_DB_URL="" 
+    DEMO_DB_URL="postgresql://neondb_owner:npg_Slyq5AdbGO3M@ep-snowy-breeze-ahwl6yw8.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require" 
     # --------------------------------
 
     echo -e "\n${BLUE}--- Database Config ---${NC}"
