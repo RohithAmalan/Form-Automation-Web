@@ -6,5 +6,5 @@ console.log('Testing SettingsManager...');
 const settings = SettingsManager.getSettings();
 console.log('Full Settings:', JSON.stringify(settings, null, 2));
 
-const headless = SettingsManager.get('headless');
+const headless = settings.form.headless;
 console.log(`headless value: ${headless} (Type: ${typeof headless})`);

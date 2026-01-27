@@ -8,3 +8,12 @@ dist/
 coverage/
 .vscode/
 backend/uploads/
+
+# Logs
+*.log
+npm-debug.log
+yarn-error.log
+
+# Build Artifacts
+backend/dist/
+frontend/.next/

@@ -41,6 +41,11 @@ A robust, AI-powered form automation agent featuring **Human-in-the-Loop (HITL)*
 
 ## ⚡ Quick Start
 
+### Prerequisites
+*   **Node.js**: v18 or newer
+*   **Git**: To clone the repository
+*   **PostgreSQL**: Local server (or a cloud database URL)
+
 Get up and running in **2 minutes**.
 
 ### 1. Clone & Setup
