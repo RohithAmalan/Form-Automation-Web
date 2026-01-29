@@ -79,12 +79,8 @@ export const FormController = {
                 return res.status(400).json({ error: "Missing url or profile_id", received: body });
             }
 
-            // Store as JSON Array of paths
-            const filePaths = files.map(f => f.path);
-            // If single file (legacy compatibility or preference), we could store string. 
-            // BUT cleaner to standardize on JSON string for consistency if storing multiple.
-            // Let's store JSON string.
-            const filePathToSave = filePaths.length > 0 ? JSON.stringify(filePaths) : null;
+            // File storage removed by user request
+            const filePathToSave = null;
 
             const finalFormName = form_name || "Untitled Form";
             const defaultPriority = SettingsManager.getSettings().queue.defaultPriority ?? 0;
@@ -282,9 +278,10 @@ export const FormController = {
                 updates.custom_data = incomingData;
             }
 
-            if (file) {
-                updates.file_path = file.path;
-            }
+            // File storage removed
+            // if (file) {
+            //     updates.file_path = file.path;
+            // }
 
             // --- PROFILE AUTO-UPDATE LOGIC ---
             // 1. Fetch Job to get Profile ID
