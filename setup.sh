@@ -43,7 +43,7 @@ if [ ! -f .env ]; then
     read -p "Set Admin Password [default: admin123]: " ADMIN_PASSWORD
     ADMIN_PASSWORD=${ADMIN_PASSWORD:-"admin123"}
 
-    echo -e "\n${GREEN}📝 Generatng .env file...${NC}"
+    echo -e "\n${GREEN}📝 Generating .env file...${NC}"
     cat > .env << EOL
 # Server Configuration
 PORT=3001
