@@ -38,9 +38,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     url TEXT NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING', -- PENDING, PROCESSING, COMPLETED, FAILED
+    type VARCHAR(50) DEFAULT 'FORM_SUBMISSION', -- FORM_SUBMISSION, GMAIL, etc.
     profile_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    form_name VARCHAR(255),
+    priority INT DEFAULT 0,
     custom_data JSONB,
-    file_path TEXT,
+    file_path TEXT, -- Deprecated (Uploads removed)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP WITH TIME ZONE,
     retries INT DEFAULT 0
